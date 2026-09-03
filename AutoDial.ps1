@@ -36,6 +36,7 @@ $FailThreshold  = 3                 # 宽带会话在但连续 N 轮探测失败
 $BaseBackoffSec = 15                # 拨号失败后的退避基数（秒），按 2 的指数递增
 $MaxBackoffSec  = 600               # 退避上限（秒）
 $AuthFailBackoffSec = 900           # 认证类失败（691/628 账号占用等）的长退避（秒）
+$AuthFastRetryCount = 6             # 认证类失败的紧盯期次数：前 N 次 30 秒短间隔，之后转长退避
 $GatewayBindFile= Join-Path $PSScriptRoot 'gateway.mac'   # 网关 MAC 指纹文件
 $GatewayWaitSec = 20                # 学网关 MAC 的等待时间（秒）
 $LogDir         = Join-Path $PSScriptRoot 'Logs'
@@ -354,9 +355,17 @@ function Invoke-DialWithBackoff {
         return $true
     }
     $script:ConsecDialFails++
-    if ($code -in @(691, 628) -or $script:LastDialWasAuthFail) {
+    # 认证类失败（691/628）分两段处理：
+    #  · 断线后前 AuthFastRetryCount 次：旧会话很可能几秒~几分钟内就释放，
+    #    用 30 秒短间隔紧盯，抓住释放窗口立即拨上（实测晚 12 秒就能成功）
+    #  · 之后仍失败：才是真正的账号占用/欠费，转 15 分钟长退避避免撞击
+    if (($code -in @(691, 628) -or $script:LastDialWasAuthFail) -and $script:ConsecDialFails -gt $AuthFastRetryCount) {
         $wait = $AuthFailBackoffSec
-        Write-Log 'WARN' ('认证类失败（错误码 {0}）：账号可能被其他设备/会话占用或欠费，{1} 分钟后重试。若长时间不恢复，请重启光猫或联系运营商释放会话。' -f $code, [int]($wait / 60))
+        Write-Log 'WARN' ('认证类失败持续（错误码 {0}，已重试 {1} 次）：账号可能被其他设备/会话占用或欠费，{2} 分钟后重试。若长时间不恢复，请重启光猫或联系运营商释放会话。' -f $code, $script:ConsecDialFails, [int]($wait / 60))
+    }
+    elseif ($code -in @(691, 628) -or $script:LastDialWasAuthFail) {
+        $wait = 30
+        Write-Log 'WARN' ('认证类失败（错误码 {0}），旧会话可能即将释放，{1} 秒后重试（前 {2} 次为紧盯期）' -f $code, $wait, $AuthFastRetryCount)
     }
     else {
         $wait = [math]::Min($BaseBackoffSec * [math]::Pow(2, $script:ConsecDialFails - 1), $MaxBackoffSec)
