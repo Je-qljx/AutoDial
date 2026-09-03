@@ -118,9 +118,26 @@ function Test-Internet {
 }
 
 # 拨号（使用系统已保存的宽带账号密码）；错误 813 时先断开再拨一次
+# 双通道策略：优先 rasphone（与用户手动点连接同走 RasDialDlg UI 路径，实测认证
+# 通过率更高），失败再试 rasdial（裸 RasDial API）作为兜底，两种客户端都覆盖
 function Invoke-Dial {
     param([string]$Reason)
-    Write-Log 'ACTION' ('开始拨号「{0}」（{1}）' -f $BroadbandName, $Reason)
+    Write-Log 'ACTION' ('开始拨号「{0}」（{1}，UI 路径）' -f $BroadbandName, $Reason)
+    # 通道1：rasphone -d（RasDialDlg，等同用户在 UI 里点连接）
+    # 注意：rasphone -d 无输出文本、退出码 0/1，连接结果用会话状态确认
+    $phoneExe = Join-Path $env:SystemRoot 'System32\rasphone.exe'
+    & $phoneExe -d $BroadbandName 2>&1 | Out-Null
+    # rasphone 是异步发起的，轮询等待会话建立（最多 40 秒）
+    $deadline = [datetime]::Now.AddSeconds(40)
+    while ([datetime]::Now -lt $deadline) {
+        Start-Sleep -Seconds 2
+        if (Test-BroadbandUp) {
+            Write-Log 'INFO' '拨号成功（rasphone/UI 路径）。'
+            return 0
+        }
+    }
+    Write-Log 'WARN' 'rasphone 拨号未在预期时间内建立会话，转 rasdial 通道重试'
+    # 通道2：rasdial（裸 RasDial API）兜底
     $out = & $RasDialExe $BroadbandName 2>&1
     $code = $LASTEXITCODE
     if ($code -eq 813) {
