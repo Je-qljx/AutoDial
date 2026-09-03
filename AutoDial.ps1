@@ -419,6 +419,9 @@ while ($true) {
                 $state = 'OK'
                 $script:FailStreak = 0
                 if ($lastState -ne $state) { Write-Log 'INFO' '宽带已连接，Internet 探测正常。' }
+                # 宽带正常（无论谁拨上的）：学习当前链路特征并入指纹，
+                # 覆盖用户手动拨号、运营商换 IP 池等场景
+                Merge-FingerprintFromCurrent
             }
             else {
                 # 会话在但上不了网：连续达标后断开重拨
