@@ -124,11 +124,13 @@ function Invoke-Dial {
     param([string]$Reason)
     Write-Log 'ACTION' ('开始拨号「{0}」（{1}，UI 路径）' -f $BroadbandName, $Reason)
     # 通道1：rasphone -d（RasDialDlg，等同用户在 UI 里点连接）
-    # 注意：rasphone -d 无输出文本、退出码 0/1，连接结果用会话状态确认
+    # 注意：rasphone -d 无输出文本、退出码 0/1，连接结果用会话状态确认。
+    # pbk 条目 PreviewUserPw=1 时会弹「连接 宽带连接」凭据确认框，等用户点确定；
+    # 弹窗期间 rasphone 阻塞但拨号流程已就绪，点确定后立即拨号——轮询窗口给足时间
     $phoneExe = Join-Path $env:SystemRoot 'System32\rasphone.exe'
     & $phoneExe -d $BroadbandName 2>&1 | Out-Null
-    # rasphone 是异步发起的，轮询等待会话建立（最多 40 秒）
-    $deadline = [datetime]::Now.AddSeconds(40)
+    # rasphone 是异步发起的，轮询等待会话建立（最多 90 秒，含弹窗等待）
+    $deadline = [datetime]::Now.AddSeconds(90)
     while ([datetime]::Now -lt $deadline) {
         Start-Sleep -Seconds 2
         if (Test-BroadbandUp) {
