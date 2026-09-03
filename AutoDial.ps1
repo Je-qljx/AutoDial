@@ -35,6 +35,7 @@ $ProbeTimeoutMs = 3000              # 单个探测目标的超时（毫秒）
 $FailThreshold  = 3                 # 宽带会话在但连续 N 轮探测失败 → 判定会话僵死，断开重拨
 $BaseBackoffSec = 15                # 拨号失败后的退避基数（秒），按 2 的指数递增
 $MaxBackoffSec  = 600               # 退避上限（秒）
+$AuthFailBackoffSec = 900           # 认证类失败（691/628 账号占用等）的长退避（秒）
 $GatewayBindFile= Join-Path $PSScriptRoot 'gateway.mac'   # 网关 MAC 指纹文件
 $GatewayWaitSec = 20                # 学网关 MAC 的等待时间（秒）
 $LogDir         = Join-Path $PSScriptRoot 'Logs'
@@ -139,6 +140,15 @@ function Invoke-Dial {
     # 错误 628（会话被远端终止）：刚断开的 PPPoE 会话运营商侧尚未释放，稍候重试，
     # 由指数退避机制自然拉开重拨间隔，这里不额外处理。
     $text = ($out | ForEach-Object { $_.ToString() }) -join ' '
+    # 认证失败检测：rasdial 有时把 691 报成 628（连接被远端终止），用系统事件日志
+    # （EapMethods-RasChap 事件 101）二次确认，供退避策略区分
+    $script:LastDialWasAuthFail = $false
+    if ($code -eq 628) {
+        try {
+            $authEvt = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-EapMethods-RasChap/Operational'; StartTime=(Get-Date).AddSeconds(-30)} -MaxEvents 1 -ErrorAction SilentlyContinue
+            if ($authEvt -and $authEvt.Id -eq 101) { $script:LastDialWasAuthFail = $true }
+        } catch { }
+    }
     if ($code -eq 0) {
         Write-Log 'INFO' '拨号成功。'
     } else {
@@ -151,19 +161,49 @@ function Invoke-Dial {
 # 原理：宽带光猫（桥接模式）在本机网卡上留下的稳定特征组合：
 #   ① 光猫设备的 MAC 地址（邻居表里学到的一切 MAC，含 IPv4/IPv6 邻居发现）
 #   ② 光猫的 IPv6 链路本地地址（fe80::/10，可随时主动 ping 促发学习，最可靠）
-#   ③ 光猫下发的 IPv4 网段（兜底：IP 还在绑定网段内 → 大概率还是那条链路）
+#   ③ IPv4 网段前缀白名单（兜底）：桥接模式下网卡 IP 由运营商 IP 池分配，
+#      每次插拔网线可能换网段（如 36.5.200.x → 36.5.63.x），所以存的是
+#      运营商大段前缀（如 36.5.），而不是精确的 /24 网段。
+#   ④ 自动学习：每次拨号成功且 Internet 探测通过（足以证明是自家线路）时，
+#      把当时的 MAC/网段前缀并入指纹，运营商调整 IP 池也无需手动重绑。
 # 网线插到其他网络（公司内网/另一台路由器/无 DHCP 的空线）时，以上特征全部
 # 对不上，脚本据此拒绝拨号。判定分支见 Test-LinkAllowed。
 
-# 读取已绑定的指纹文件（三行：MAC 集合 / IPv6 链路本地 / IPv4 网段）；无绑定返回 $null
+# 指纹文件默认路径（JSON 格式）
+$GatewayBindFile = Join-Path $PSScriptRoot 'gateway.mac'
+
+# 读取已绑定的指纹（JSON）；兼容旧版三行文本格式并自动升级；无绑定返回 $null
 function Get-BoundFingerprint {
-    if (Test-Path $GatewayBindFile) {
-        try {
-            $lines = Get-Content $GatewayBindFile | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
-            if ($lines.Count -ge 1) { return $lines } else { return $null }
-        } catch { return $null }
-    }
-    return $null
+    if (-not (Test-Path $GatewayBindFile)) { return $null }
+    try {
+        $raw = (Get-Content -Raw $GatewayBindFile).Trim()
+        if ($raw -notmatch '^\{') {
+            # 旧格式：三行文本（MAC 集合 / IPv6 / 网段）→ 升级为 JSON
+            $lines = $raw -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+            $oldMacs = @(); $oldV6 = $null; $oldSubnets = @()
+            if ($lines.Count -ge 1) { $oldMacs = ($lines[0] -split ',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_ -match '^[0-9A-F]{2}-' } }
+            if ($lines.Count -ge 2 -and $lines[1]) { $oldV6 = $lines[1] }
+            if ($lines.Count -ge 3 -and $lines[2]) {
+                $p = $lines[2].Split('.')
+                if ($p.Count -ge 2) { $oldSubnets = @('{0}.{1}.' -f $p[0], $p[1]) }
+            }
+            $fp = @{ Macs = @($oldMacs); V6 = $oldV6; Subnets = @($oldSubnets) }
+            Save-Fingerprint $fp
+            return $fp
+        }
+        $j = $raw | ConvertFrom-Json
+        return @{ Macs = @($j.Macs); V6 = $j.V6; Subnets = @($j.Subnets) }
+    } catch { return $null }
+}
+
+# 保存指纹（JSON）
+function Save-Fingerprint {
+    param($Fp)
+    @{
+        Macs    = @($Fp.Macs | Sort-Object -Unique)
+        V6      = $Fp.V6
+        Subnets = @($Fp.Subnets | Sort-Object -Unique)
+    } | ConvertTo-Json -Depth 3 | Set-Content -Path $GatewayBindFile -Encoding ASCII
 }
 
 # 从有线网卡的邻居表收集一切学到的 MAC（排除组播/广播/全零）
@@ -178,54 +218,75 @@ function Get-LinkMacs {
     return ($macs | Sort-Object -Unique)
 }
 
-# 主动探测光猫的 IPv6 链路本地地址促发邻居学习；学不到返回 $null
+# 当前学到的 IPv6 链路本地地址（无则返回 $null）
 function Get-ModemLinkLocalV6 {
     $v6 = Get-NetNeighbor -InterfaceAlias $WiredAdapters[0] -ErrorAction SilentlyContinue |
           Where-Object { $_.IPAddress -like 'fe80:*' -and $_.State -in @('Reachable','Stale','Permanent','Probe','Delay') -and $_.LinkLayerAddress -and $_.LinkLayerAddress -notmatch '^(FF-|33-33|00-00-00-00)' } |
           Select-Object -First 1
     if ($v6) { return $v6.IPAddress }
-    # 促发：ping 组播地址让路由器回应（Solicited-node / all-routers）
-    Start-Process -FilePath 'ping.exe' -ArgumentList ('-6','-n','1','-w','1500','ff02::1%以太网') -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+    return $null
+}
+
+# 当前有线网卡的 IPv4 网段前缀（a.b.，前两段）；无 IP 返回 $null
+function Get-CurrentSubnetPrefix {
+    foreach ($name in $WiredAdapters) {
+        $ipCfg = Get-NetIPConfiguration -InterfaceAlias $name -ErrorAction SilentlyContinue
+        $ipObj = $ipCfg.IPv4Address | Select-Object -First 1
+        if ($ipObj) {
+            $p = $ipObj.IPAddress.Split('.')
+            return ('{0}.{1}.' -f $p[0], $p[1])
+        }
+    }
     return $null
 }
 
 # 当前链路指纹（动态采集）
 function Get-CurrentFingerprint {
-    $f = @{ Macs = @(); V6 = $null; Subnet = $null }
+    $f = @{ Macs = @(); V6 = $null; Subnets = @() }
     $f.Macs = Get-LinkMacs
     $f.V6   = Get-ModemLinkLocalV6
-    foreach ($name in $WiredAdapters) {
-        $ipCfg = Get-NetIPConfiguration -InterfaceAlias $name -ErrorAction SilentlyContinue
-        $ipObj = $ipCfg.IPv4Address | Select-Object -First 1
-        if ($ipObj) {
-            $parts = $ipObj.IPAddress.Split('.')
-            $f.Subnet = ('{0}.{1}.{2}' -f $parts[0], $parts[1], $parts[2])
-            break
-        }
-    }
+    $sp = Get-CurrentSubnetPrefix
+    if ($sp) { $f.Subnets = @($sp) }
     return $f
 }
 
-# -BindGateway：把当前链路指纹写入绑定文件
+# 把当前学到的特征并入指纹（拨号成功后自动学习调用）
+function Merge-FingerprintFromCurrent {
+    $bound = Get-BoundFingerprint
+    if (-not $bound) { return }
+    $cur = Get-CurrentFingerprint
+    $before = (@($bound.Macs).Count, @($bound.Subnets).Count -join '/')
+    $bound.Macs    = @($bound.Macs) + @($cur.Macs)
+    if ($cur.V6 -and -not $bound.V6) { $bound.V6 = $cur.V6 }
+    $bound.Subnets = @($bound.Subnets) + @($cur.Subnets)
+    $bound.Macs    = @($bound.Macs    | Where-Object { $_ } | Sort-Object -Unique)
+    $bound.Subnets = @($bound.Subnets | Where-Object { $_ } | Sort-Object -Unique)
+    $after = (@($bound.Macs).Count, @($bound.Subnets).Count -join '/')
+    if ($before -ne $after) {
+        Save-Fingerprint $bound
+        Write-Log 'INFO' ('指纹自动学习：MAC/网段并入指纹（当前 MAC {0} 个、网段前缀 {1} 个）' -f @($bound.Macs).Count, @($bound.Subnets).Count)
+    }
+}
+
+# -BindGateway：把当前链路指纹写入绑定文件（可与网段前缀白名单一起手写扩展）
 if ($BindGateway) {
     if (-not (Test-WirePlugged)) {
         Write-Host '错误：有线网卡网线未连接，无法绑定链路指纹。请插好宽带网线后重试。' -ForegroundColor Red
         exit 1
     }
-    Write-Host '正在采集当前链路指纹（最多等待 20 秒，会促发邻居学习）…'
+    Write-Host '正在采集当前链路指纹…'
     $f = Get-CurrentFingerprint
-    if (-not $f -or ($f.Macs.Count -eq 0 -and -not $f.V6 -and -not $f.Subnet)) {
+    if (-not $f -or ($f.Macs.Count -eq 0 -and -not $f.V6 -and $f.Subnets.Count -eq 0)) {
         Write-Host '错误：未能采集到任何链路特征（MAC/IPv6/网段）。请确认网线插在光猫上。' -ForegroundColor Red
         exit 1
     }
-    $macsLine = ($f.Macs -join ',')
-    if (-not $macsLine -and $f.V6) { $macsLine = '（待拨号后学习）' }
-    @($macsLine, $f.V6, $f.Subnet) | Set-Content -Path $GatewayBindFile -Encoding ASCII
+    Save-Fingerprint $f
     Write-Host '绑定成功！当前链路指纹：' -ForegroundColor Green
-    Write-Host ("  光猫 MAC     : {0}" -f ($(if ($f.Macs.Count) { $f.Macs -join ', ' } else { '（暂无，拨号后可重新绑定补充）' })))
-    Write-Host ("  IPv6 链路本地: {0}" -f ($(if ($f.V6) { $f.V6 } else { '（暂无）' })))
-    Write-Host ("  IPv4 网段    : {0}.*" -f ($(if ($f.Subnet) { $f.Subnet } else { '（暂无）' })))
-    Write-Host ("已保存到 {0}。此后只有链路特征匹配（网线插在光猫上）才会拨号。" -f $GatewayBindFile)
+    Write-Host ("  光猫 MAC       : {0}" -f ($(if ($f.Macs.Count) { $f.Macs -join ', ' } else { '（暂无，拨号成功后会自动学习补充）' })))
+    Write-Host ("  IPv6 链路本地  : {0}" -f ($(if ($f.V6) { $f.V6 } else { '（暂无）' })))
+    $subnetText = if ($f.Subnets.Count) { (($f.Subnets | ForEach-Object { $_ + '*' }) -join ', ') } else { '（暂无）' }
+    Write-Host ("  网段前缀白名单 : {0}" -f $subnetText)
+    Write-Host ("已保存到 {0}（JSON）。拨号成功后 MAC/网段会自动并入指纹。" -f $GatewayBindFile)
     exit 0
 }
 
@@ -240,17 +301,14 @@ if ($ClearGateway) {
     exit 0
 }
 
-# 拨号守门：链路指纹不匹配（网线插在其他网络上）→ 禁止拨号
+# 拨号守门：链路特征对不上（网线插在其他网络上）→ 禁止拨号
 # 返回 $true = 允许拨号；$false = 禁止
 function Test-LinkAllowed {
     $bound = Get-BoundFingerprint
     if (-not $bound) { return $true }   # 未绑定指纹则不做校验
-    $boundMacs   = @()
-    $boundV6     = $null
-    $boundSubnet = $null
-    if ($bound.Count -ge 1) { $boundMacs = ($bound[0] -split ',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_ -match '^[0-9A-F]{2}-' } }
-    if ($bound.Count -ge 2) { $boundV6 = $bound[1] }
-    if ($bound.Count -ge 3) { $boundSubnet = $bound[2] }
+    $boundMacs    = @($bound.Macs    | Where-Object { $_ })
+    $boundV6      = $bound.V6
+    $boundSubnets = @($bound.Subnets | Where-Object { $_ })
 
     $cur = Get-CurrentFingerprint
 
@@ -262,12 +320,19 @@ function Test-LinkAllowed {
 
     # 分支2：学到过 MAC 但都不是光猫的 → 网线插在了其他网络（最典型的误拨场景）
     if ($cur.Macs.Count -gt 0) {
-        Write-Log 'WARN' ('链路指纹不匹配（绑定 MAC: {0} / 当前学到: {1}），网线可能插在其他网络上，禁止拨号。' -f (($boundMacs -join ',') -replace '（.*）',''), ($cur.Macs -join ','))
+        Write-Log 'WARN' ('链路指纹不匹配（绑定 MAC: {0} / 当前学到: {1}），网线可能插在其他网络上，禁止拨号。' -f ($boundMacs -join ','), ($cur.Macs -join ','))
         return $false
     }
 
-    # 分支3：没学到任何 MAC 但 IPv4 还在绑定网段内 → 兜底放行（等待邻居学习）
-    if ($boundSubnet -and $cur.Subnet -eq $boundSubnet) { return $true }
+    # 分支3：没学到任何 MAC，IPv4 在网段前缀白名单内 → 兜底放行（等待邻居学习）
+    $sp = Get-CurrentSubnetPrefix
+    if ($sp) {
+        foreach ($bs in $boundSubnets) {
+            if ($sp -like "$bs*") { return $true }
+        }
+        Write-Log 'WARN' ('链路指纹不匹配（当前网段前缀 {0} 不在白名单 [{1}] 内），网线可能插在其他网络上，禁止拨号。' -f $sp, ($boundSubnets -join ', '))
+        return $false
+    }
 
     # 分支4：什么特征都没有 → 视为未知链路，拒绝
     Write-Log 'WARN' '链路指纹校验：当前链路无任何可识别特征（无 MAC/IPv6/网段匹配），禁止拨号。'
@@ -275,6 +340,8 @@ function Test-LinkAllowed {
 }
 
 # 拨号 + 失败指数退避：成功则清零，失败则按 15s、30s、60s…递增（上限 10 分钟）
+# 认证类错误（691/628，多为账号被占用或欠费）不随次数恢复，改用 15 分钟长退避，
+# 避免反复撞击认证服务器
 function Invoke-DialWithBackoff {
     param([string]$Reason)
     if (-not (Test-LinkAllowed)) { return $false }
@@ -282,12 +349,20 @@ function Invoke-DialWithBackoff {
     if ($code -eq 0) {
         $script:ConsecDialFails = 0
         $script:NextDialAt = [datetime]::MinValue
+        # 拨号成功：把当前学到的 MAC/网段并入指纹（证明这就是自家宽带线路）
+        Merge-FingerprintFromCurrent
         return $true
     }
     $script:ConsecDialFails++
-    $wait = [math]::Min($BaseBackoffSec * [math]::Pow(2, $script:ConsecDialFails - 1), $MaxBackoffSec)
+    if ($code -in @(691, 628) -or $script:LastDialWasAuthFail) {
+        $wait = $AuthFailBackoffSec
+        Write-Log 'WARN' ('认证类失败（错误码 {0}）：账号可能被其他设备/会话占用或欠费，{1} 分钟后重试。若长时间不恢复，请重启光猫或联系运营商释放会话。' -f $code, [int]($wait / 60))
+    }
+    else {
+        $wait = [math]::Min($BaseBackoffSec * [math]::Pow(2, $script:ConsecDialFails - 1), $MaxBackoffSec)
+        Write-Log 'WARN' ('连续第 {0} 次拨号失败，{1} 秒后重试' -f $script:ConsecDialFails, [int]$wait)
+    }
     $script:NextDialAt = [datetime]::Now.AddSeconds($wait)
-    Write-Log 'WARN' ('连续第 {0} 次拨号失败，{1} 秒后重试' -f $script:ConsecDialFails, [int]$wait)
     return $false
 }
 
