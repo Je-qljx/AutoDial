@@ -16,6 +16,9 @@
 #   AutoDial.ps1 -BindGateway   绑定当前有线网卡上学到的网关 MAC 作为指纹（需宽带网线在位）
 #   AutoDial.ps1 -ClearGateway  清除指纹绑定（恢复为不校验指纹）
 #   AutoDial.ps1 -Detached      由 Start-AutoDial.vbs 隐藏启动时使用，勿手动传
+#
+# 配置：优先读同目录 AutoDial.json（换机只需改 JSON）；文件缺失或非法时
+#       使用下方内置默认值（兼容旧部署）。
 # ============================================================================
 param(
     [switch]$Once,
@@ -25,7 +28,8 @@ param(
     [switch]$Detached
 )
 
-# ============================ 配置区（按需修改） ============================
+# ============================ 配置区（内置默认值） ============================
+# 可被同目录 AutoDial.json 中的同名键覆盖（换机适配只需改 JSON）
 $BroadbandName  = '宽带连接'        # PPPoE 拨号条目名称（网络连接里显示的名字）
 $WiredAdapters  = @('以太网')       # 插网线的物理网卡名称，可写多个，如 @('以太网','以太网 2')
 $CheckInterval  = 15                # 检查周期（秒）
@@ -37,11 +41,24 @@ $BaseBackoffSec = 15                # 拨号失败后的退避基数（秒），
 $MaxBackoffSec  = 600               # 退避上限（秒）
 $AuthFailBackoffSec = 900           # 认证类失败（691/628 账号占用等）的长退避（秒）
 $AuthFastRetryCount = 6             # 认证类失败的紧盯期次数：前 N 次 30 秒短间隔，之后转长退避
-$GatewayBindFile= Join-Path $PSScriptRoot 'gateway.mac'   # 网关 MAC 指纹文件
 $GatewayWaitSec = 20                # 学网关 MAC 的等待时间（秒）
-$LogDir         = Join-Path $PSScriptRoot 'Logs'
 $LogKeepDays    = 30                # 日志保留天数
 $EnableLogFile  = $true             # 是否写日志文件
+$GatewayBindFile= Join-Path $PSScriptRoot 'gateway.mac'   # 网关 MAC 指纹文件
+$LogDir         = Join-Path $PSScriptRoot 'Logs'
+
+# 外置配置：AutoDial.json 存在且合法时，用其键覆盖内置默认值（仅覆盖上面列出的可调项）
+$ConfigFile = Join-Path $PSScriptRoot 'AutoDial.json'
+if (Test-Path $ConfigFile) {
+    try {
+        $cfg = Get-Content -Raw -Path $ConfigFile -Encoding UTF8 | ConvertFrom-Json
+        foreach ($prop in $cfg.PSObject.Properties) {
+            if (Get-Variable -Name $prop.Name -Scope Local -ErrorAction SilentlyContinue) {
+                Set-Variable -Name $prop.Name -Value $prop.Value -Scope Local
+            }
+        }
+    } catch { }
+}
 # ============================================================================
 
 $RasDialExe = Join-Path $env:SystemRoot 'System32\rasdial.exe'
@@ -189,8 +206,7 @@ function Invoke-Dial {
 # 网线插到其他网络（公司内网/另一台路由器/无 DHCP 的空线）时，以上特征全部
 # 对不上，脚本据此拒绝拨号。判定分支见 Test-LinkAllowed。
 
-# 指纹文件默认路径（JSON 格式）
-$GatewayBindFile = Join-Path $PSScriptRoot 'gateway.mac'
+# 指纹文件路径已在配置区定义（$GatewayBindFile，可被 AutoDial.json 覆盖）
 
 # 读取已绑定的指纹（JSON）；兼容旧版三行文本格式并自动升级；无绑定返回 $null
 function Get-BoundFingerprint {
