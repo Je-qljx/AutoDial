@@ -427,21 +427,21 @@ $grpOps.Text   = '操作'
 $grpOps.Location = New-Object System.Drawing.Point(12, 386)
 $grpOps.Size   = New-Object System.Drawing.Size(620, 62)
 
-# 操作按钮一排 6 个：15 + 95*6 + 5*5 + 15 = 620（与分组框同宽）
+# 操作按钮一排 5 个：15 + 110*5 + 10*4 + 15 = 640 → 收尾 120 补齐 620（与分组框同宽）
 $btnInstall = New-Object System.Windows.Forms.Button
-$btnInstall.Text = '安装并启动'; $btnInstall.Location = New-Object System.Drawing.Point(15, 24); $btnInstall.Size = New-Object System.Drawing.Size(95, 28)
+$btnInstall.Text = '安装并启动'; $btnInstall.Location = New-Object System.Drawing.Point(15, 24); $btnInstall.Size = New-Object System.Drawing.Size(110, 28)
 $btnInstall.Add_Click({ Invoke-ScriptOutput -Title '安装并启动' -FilePath $InstPs1 })
 
 $btnUninstall = New-Object System.Windows.Forms.Button
-$btnUninstall.Text = '停止并卸载'; $btnUninstall.Location = New-Object System.Drawing.Point(115, 24); $btnUninstall.Size = New-Object System.Drawing.Size(95, 28)
+$btnUninstall.Text = '停止并卸载'; $btnUninstall.Location = New-Object System.Drawing.Point(135, 24); $btnUninstall.Size = New-Object System.Drawing.Size(110, 28)
 $btnUninstall.Add_Click({ Stop-GuardAndUninstall })
 
 $btnBind = New-Object System.Windows.Forms.Button
-$btnBind.Text = '绑定指纹'; $btnBind.Location = New-Object System.Drawing.Point(215, 24); $btnBind.Size = New-Object System.Drawing.Size(95, 28)
+$btnBind.Text = '绑定指纹'; $btnBind.Location = New-Object System.Drawing.Point(255, 24); $btnBind.Size = New-Object System.Drawing.Size(110, 28)
 $btnBind.Add_Click({ Bind-Gateway })
 
 $btnRestart = New-Object System.Windows.Forms.Button
-$btnRestart.Text = '重启守护'; $btnRestart.Location = New-Object System.Drawing.Point(315, 24); $btnRestart.Size = New-Object System.Drawing.Size(95, 28)
+$btnRestart.Text = '重启守护'; $btnRestart.Location = New-Object System.Drawing.Point(375, 24); $btnRestart.Size = New-Object System.Drawing.Size(110, 28)
 $btnRestart.Add_Click({
     # 用完整安装收尾（而非仅拉起进程）：Uninstall 会删掉自启项，
     # Install 同时恢复自启 + 启动守护，保证重启后清单仍全绿
@@ -450,7 +450,7 @@ $btnRestart.Add_Click({
 })
 
 $btnCfgDetail = New-Object System.Windows.Forms.Button
-$btnCfgDetail.Text = '配置详情'; $btnCfgDetail.Location = New-Object System.Drawing.Point(415, 24); $btnCfgDetail.Size = New-Object System.Drawing.Size(95, 28)
+$btnCfgDetail.Text = '配置详情'; $btnCfgDetail.Location = New-Object System.Drawing.Point(495, 24); $btnCfgDetail.Size = New-Object System.Drawing.Size(110, 28)
 $btnCfgDetail.Add_Click({ Show-ConfigDetail })
 
 $grpOps.Controls.AddRange(@($btnInstall, $btnUninstall, $btnBind, $btnRestart, $btnCfgDetail))
