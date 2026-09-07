@@ -453,11 +453,7 @@ $btnCfgDetail = New-Object System.Windows.Forms.Button
 $btnCfgDetail.Text = '配置详情'; $btnCfgDetail.Location = New-Object System.Drawing.Point(415, 24); $btnCfgDetail.Size = New-Object System.Drawing.Size(95, 28)
 $btnCfgDetail.Add_Click({ Show-ConfigDetail })
 
-$btnOpenCfg = New-Object System.Windows.Forms.Button
-$btnOpenCfg.Text = '打开配置'; $btnOpenCfg.Location = New-Object System.Drawing.Point(515, 24); $btnOpenCfg.Size = New-Object System.Drawing.Size(90, 28)
-$btnOpenCfg.Add_Click({ Open-ConfigEditor })
-
-$grpOps.Controls.AddRange(@($btnInstall, $btnUninstall, $btnBind, $btnRestart, $btnCfgDetail, $btnOpenCfg))
+$grpOps.Controls.AddRange(@($btnInstall, $btnUninstall, $btnBind, $btnRestart, $btnCfgDetail))
 $form.Controls.Add($grpOps)
 
 # --- 日志区 ---
