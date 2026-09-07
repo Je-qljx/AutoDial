@@ -476,19 +476,10 @@ $txtLog.Font       = New-Object System.Drawing.Font('Consolas', 9)
 $grpLog.Controls.Add($txtLog)
 $form.Controls.Add($grpLog)
 
-$btnOpenLogs = New-Object System.Windows.Forms.Button
-$btnOpenLogs.Text = '打开日志文件夹'
-$btnOpenLogs.Location = New-Object System.Drawing.Point(495, 604)
-$btnOpenLogs.Size = New-Object System.Drawing.Size(137, 28)
-$btnOpenLogs.Add_Click({
-    if (Test-Path $LogDirPath) { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $LogDirPath) }
-    else { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $Root) }
-})
-$form.Controls.Add($btnOpenLogs)
-
 $btnAllLogs = New-Object System.Windows.Forms.Button
 $btnAllLogs.Text = '查看全部日志'
-$btnAllLogs.Location = New-Object System.Drawing.Point(345, 604)
+# 单按钮居中：620 客户区放 140px 按钮 → x = (620-140)/2 = 240
+$btnAllLogs.Location = New-Object System.Drawing.Point(240, 604)
 $btnAllLogs.Size = New-Object System.Drawing.Size(140, 28)
 $btnAllLogs.Add_Click({ Show-AllLogs })
 $form.Controls.Add($btnAllLogs)
