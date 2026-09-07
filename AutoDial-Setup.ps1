@@ -416,6 +416,7 @@ for ($i = 0; $i -lt $script:Checks.Count; $i++) {
     $detail.ForeColor = [System.Drawing.Color]::DimGray
     $fix = New-Object System.Windows.Forms.Button
     $fix.Dock = 'Fill'; $fix.Margin = New-Object System.Windows.Forms.Padding(6, 5, 3, 5)
+    $fix.Text = '已就绪'; $fix.Enabled = $false   # 初始灰显，首轮 Refresh-Checks 按真实状态更新
     $fix.Tag = $null   # 刷新时写入动作标识字符串，点击时用 $this.Tag 读取（不用闭包，避免作用域坑）
     $fix.Add_Click({
         $action = $this.Tag
@@ -806,7 +807,8 @@ function Refresh-Status {
     }
 }
 
-# 清单逐项刷新 + 修复按钮显隐
+# 清单逐项刷新 + 修复按钮状态（按钮常驻不隐藏，用 Enabled 置灰表达可用性：
+# 绿灯=灰显「已就绪」，红灯可修=亮起，红灯需人工=灰显「需人工处理」，行高稳定不跳动）
 function Refresh-Checks {
     for ($i = 0; $i -lt $script:Checks.Count; $i++) {
         $item = $script:Checks[$i]
@@ -816,7 +818,8 @@ function Refresh-Checks {
             $row.Dot.BackColor = [System.Drawing.Color]::ForestGreen
             $row.Detail.ForeColor = [System.Drawing.Color]::DimGray
             $row.Detail.Text = $r.Detail
-            $row.FixBtn.Visible = $false
+            $row.FixBtn.Text = '已就绪'
+            $row.FixBtn.Enabled = $false
             $row.FixBtn.Tag = $null
         } else {
             $row.Dot.BackColor = [System.Drawing.Color]::Firebrick
@@ -832,10 +835,11 @@ function Refresh-Checks {
                     'StartGuard'  { '启动守护' }
                     default       { '修复' }
                 }
-                $row.FixBtn.Visible = $true
+                $row.FixBtn.Enabled = $true
                 $row.FixBtn.Tag = $r.Fix
             } else {
-                $row.FixBtn.Visible = $false
+                $row.FixBtn.Text = '需人工处理'
+                $row.FixBtn.Enabled = $false
                 $row.FixBtn.Tag = $null
             }
         }
