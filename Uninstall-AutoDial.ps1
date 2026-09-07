@@ -1,17 +1,23 @@
 ﻿# ============================================================================
-# Uninstall-AutoDial.ps1 - 卸载：删除开机自启 + 结束正在运行的守护进程
-# 不需要管理员权限。不会改动宽带连接本身的状态。
+# Uninstall-AutoDial.ps1 - 卸载：删除开机自启（计划任务 + 启动项快捷方式）
+# + 结束正在运行的守护进程。不需要管理员权限。不会改动宽带连接本身的状态。
 # ============================================================================
 $ErrorActionPreference = 'Continue'
 
-# 1) 删除启动项
+# 1) 删除自启：计划任务和启动文件夹快捷方式都清（历史安装可能是任一形态）
+try {
+    Unregister-ScheduledTask -TaskName 'AutoDial' -Confirm:$false -ErrorAction Stop
+    Write-Host '已删除计划任务：AutoDial'
+} catch {
+    Write-Host '计划任务不存在（未以计划任务方式安装）。'
+}
 $startup = [Environment]::GetFolderPath('Startup')
 $lnkPath = Join-Path $startup 'AutoDial.lnk'
 if (Test-Path $lnkPath) {
     Remove-Item $lnkPath -Force
     Write-Host "已删除启动项：$lnkPath"
 } else {
-    Write-Host '启动项不存在（可能已卸载）。'
+    Write-Host '启动项快捷方式不存在。'
 }
 
 # 2) 结束守护进程（排除卸载脚本自身的进程）

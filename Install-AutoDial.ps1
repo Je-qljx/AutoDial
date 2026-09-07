@@ -1,13 +1,12 @@
 ﻿# ============================================================================
 # Install-AutoDial.ps1 - 一键安装：注册开机自启 + 立即启动守护进程
-# 只写当前用户的「启动」文件夹，不需要管理员权限。可重复运行（幂等）。
+# 优先注册计划任务（登录触发）；失败则回退启动文件夹快捷方式。
+# 均为用户级操作，不需要管理员权限。可重复运行（幂等）。
 # ============================================================================
 $ErrorActionPreference = 'Stop'
 
 $dir     = $PSScriptRoot
 $vbs     = Join-Path $dir 'Start-AutoDial.vbs'
-$startup = [Environment]::GetFolderPath('Startup')
-$lnkPath = Join-Path $startup 'AutoDial.lnk'
 
 if (-not (Test-Path $vbs)) {
     Write-Host "未找到 $vbs，请确认安装包完整。" -ForegroundColor Red
@@ -25,15 +24,42 @@ if (-not (Test-Path $bindFile)) {
     }
 }
 
-# 1) 创建/刷新启动文件夹快捷方式（登录时自动隐藏启动守护进程）
-$shell = New-Object -ComObject WScript.Shell
-if (Test-Path $lnkPath) { Remove-Item $lnkPath -Force }
-$lnk = $shell.CreateShortcut($lnkPath)
-$lnk.TargetPath       = $vbs
-$lnk.WorkingDirectory = $dir
-$lnk.Description       = '宽带自动拨号守护（开机自启）'
-$lnk.Save()
-Write-Host "已创建启动项：$lnkPath"
+# 1) 注册开机自启：优先计划任务（登录触发、立即执行，不受 Explorer 延迟处理
+#    启动文件夹影响）；标准用户注册被拒（权限/策略）时回退启动文件夹快捷方式。
+$taskName  = 'AutoDial'
+$me        = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$installed = 'task'
+try {
+    $action  = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"{0}"' -f $vbs) -WorkingDirectory $dir
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $me
+    # ExecutionTimeLimit=0 必须显式设：任务默认 72 小时强杀，守护进程会三天一死
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+                -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+    $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+        -Settings $settings -Principal $principal -Description '宽带自动拨号守护（开机自启）' -Force | Out-Null
+    Write-Host "已注册计划任务「$taskName」（用户 $me 登录时自动启动守护）。"
+    # 计划任务生效后清掉旧版启动文件夹快捷方式，避免双入口重复拉起（有 Mutex 兜底，但留着易混淆）
+    $startup = [Environment]::GetFolderPath('Startup')
+    $lnkPath = Join-Path $startup 'AutoDial.lnk'
+    if (Test-Path $lnkPath) {
+        Remove-Item $lnkPath -Force
+        Write-Host "已移除旧启动项快捷方式：$lnkPath"
+    }
+} catch {
+    Write-Host "计划任务注册失败（$($_.Exception.Message)），回退为启动文件夹快捷方式。" -ForegroundColor Yellow
+    $installed = 'lnk'
+    $shell = New-Object -ComObject WScript.Shell
+    $startup = [Environment]::GetFolderPath('Startup')
+    $lnkPath = Join-Path $startup 'AutoDial.lnk'
+    if (Test-Path $lnkPath) { Remove-Item $lnkPath -Force }
+    $lnk = $shell.CreateShortcut($lnkPath)
+    $lnk.TargetPath       = $vbs
+    $lnk.WorkingDirectory = $dir
+    $lnk.Description       = '宽带自动拨号守护（开机自启）'
+    $lnk.Save()
+    Write-Host "已创建启动项：$lnkPath"
+}
 
 # 2) 立即启动守护进程（若已在运行，互斥锁会让新实例自动退出）
 Start-Process -FilePath 'wscript.exe' -ArgumentList ('"{0}"' -f $vbs) -WindowStyle Hidden

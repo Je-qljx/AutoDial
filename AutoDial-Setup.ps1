@@ -13,7 +13,7 @@
 #   3. 拨号弹窗已关（rasphone.pbk 的 PreviewUserPw=0），可一键修复
 #   4. 有线网卡在位（名称与配置一致）
 #   5. 链路指纹已绑定（gateway.mac 存在）
-#   6. 开机自启已安装（启动文件夹 AutoDial.lnk）
+#   6. 开机自启已安装（计划任务 AutoDial 优先，回退启动文件夹 AutoDial.lnk）
 #   7. 守护进程运行中（Mutex 探测，不干扰现有单实例机制）
 # ============================================================================
 
@@ -31,6 +31,7 @@ $ConfigFile  = Join-Path $Root 'AutoDial.json'
 $BindFile    = Join-Path $Root 'gateway.mac'
 $LogDirPath  = Join-Path $Root 'Logs'
 $StartupLnk  = Join-Path ([Environment]::GetFolderPath('Startup')) 'AutoDial.lnk'
+$TaskName    = 'AutoDial'
 $PbkPath     = Join-Path $env:APPDATA 'Microsoft\Network\Connections\Pbk\rasphone.pbk'
 $MutexName   = 'AutoDial_BroadbandGuard'
 
@@ -47,7 +48,8 @@ $DefaultConfig = [ordered]@{
     MaxBackoffSec      = 600
     AuthFailBackoffSec = 900
     AuthFastRetryCount = 6
-    GatewayWaitSec     = 20
+    FastPollIntervalSec = 5
+    FastPollWindowSec   = 120
     LogKeepDays        = 30
     EnableLogFile      = $true
 }
@@ -195,8 +197,13 @@ function Check-Fingerprint {
 }
 
 function Check-AutoStart {
+    # 与 Install-AutoDial.ps1 的双形态对应：优先计划任务，其次启动文件夹快捷方式
+    try {
+        $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        return @{ Ok=$true; Detail=('开机自启已安装（计划任务 {0}，登录触发）' -f $t.TaskName); Fix=$null }
+    } catch { }
     if (Test-Path $StartupLnk) {
-        return @{ Ok=$true; Detail='开机自启已安装（启动文件夹 AutoDial.lnk）'; Fix=$null }
+        return @{ Ok=$true; Detail='开机自启已安装（启动文件夹 AutoDial.lnk，计划任务不可用时的回退形态）'; Fix=$null }
     }
     return @{ Ok=$false; Detail='开机自启未安装'; Fix='Install' }
 }

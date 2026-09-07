@@ -41,7 +41,8 @@ $BaseBackoffSec = 15                # 拨号失败后的退避基数（秒），
 $MaxBackoffSec  = 600               # 退避上限（秒）
 $AuthFailBackoffSec = 900           # 认证类失败（691/628 账号占用等）的长退避（秒）
 $AuthFastRetryCount = 6             # 认证类失败的紧盯期次数：前 N 次 30 秒短间隔，之后转长退避
-$GatewayWaitSec = 20                # 学网关 MAC 的等待时间（秒）
+$FastPollIntervalSec = 5            # 开机快速轮询节拍（秒）：启动初期网络栈未就绪，加密采样尽早捕获就绪时刻
+$FastPollWindowSec   = 120          # 开机快速轮询窗口（秒）：超过后回 CheckInterval 常规节拍
 $LogKeepDays    = 30                # 日志保留天数
 $EnableLogFile  = $true             # 是否写日志文件
 $GatewayBindFile= Join-Path $PSScriptRoot 'gateway.mac'   # 网关 MAC 指纹文件
@@ -62,6 +63,7 @@ if (Test-Path $ConfigFile) {
 # ============================================================================
 
 $RasDialExe = Join-Path $env:SystemRoot 'System32\rasdial.exe'
+$script:StartedAt      = Get-Date
 $script:LastBeat       = Get-Date
 $script:FailStreak     = 0
 $script:ConsecDialFails = 0
@@ -115,8 +117,11 @@ function Get-BroadbandIPv4 {
 
 # Internet 连通性探测：对多个公网 IP 做 TCP 53 握手，任一通即视为正常。
 # 优先绑定宽带连接的本机 IP，让探测尽量走宽带出口而非其他网络。
+# 各目标并行发起（ConnectAsync + Task.WaitAny 收割），总超时即单个目标的
+# ProbeTimeoutMs——串行实现下「全部超时」要花目标数倍时长，会拖慢僵死判定。
 function Test-Internet {
     $srcIp = Get-BroadbandIPv4
+    $attempts = New-Object System.Collections.ArrayList
     foreach ($target in $ProbeIPs) {
         $client = New-Object System.Net.Sockets.TcpClient
         try {
@@ -126,10 +131,31 @@ function Test-Internet {
                     $client.Client.Bind($localEp)
                 } catch { }
             }
-            $task = $client.ConnectAsync($target, $ProbePort)
-            if ($task.Wait($ProbeTimeoutMs) -and $client.Connected) { return $true }
-        } catch { }
-        finally { try { $client.Close() } catch { } }
+            [void]$attempts.Add(@{ Client = $client; Task = $client.ConnectAsync($target, $ProbePort) })
+        } catch {
+            try { $client.Close() } catch { }
+        }
+    }
+    $deadline = [datetime]::Now.AddMilliseconds($ProbeTimeoutMs)
+    try {
+        while ($attempts.Count -gt 0) {
+            $remain = [int]($deadline - [datetime]::Now).TotalMilliseconds
+            if ($remain -le 0) { break }
+            try {
+                $tasks = @($attempts | ForEach-Object { $_.Task })
+                $idx = [System.Threading.Tasks.Task]::WaitAny($tasks, $remain)
+            } catch { $idx = -1 }
+            if ($idx -lt 0) { break }
+            $done = $attempts[$idx]
+            $attempts.RemoveAt($idx)
+            if (-not $done.Task.IsFaulted -and $done.Client.Connected) {
+                try { $done.Client.Close() } catch { }
+                return $true
+            }
+        }
+    }
+    finally {
+        foreach ($a in $attempts) { try { $a.Client.Close() } catch { } }
     }
     return $false
 }
@@ -503,7 +529,10 @@ while ($true) {
     }
 
     if ($Once) { break }
-    Start-Sleep -Seconds $CheckInterval
+    # 开机快速轮询窗口：启动初期 DHCP/邻居表往往尚未就绪，用更密的节拍尽早
+    # 捕获网络就绪时刻；窗口结束后回常规节拍。拨号退避闸门（NextDialAt）不受节拍影响。
+    $pollSec = if (((Get-Date) - $script:StartedAt).TotalSeconds -lt $FastPollWindowSec) { $FastPollIntervalSec } else { $CheckInterval }
+    Start-Sleep -Seconds $pollSec
 }
 
 try { $mutex.ReleaseMutex() } catch { }
