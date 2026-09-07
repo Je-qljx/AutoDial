@@ -174,7 +174,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "D:\AutoDial\AutoDial.ps1" -
 | `WiredAdapters` | `["以太网"]` | 插网线的物理网卡名，可写多个 |
 | `CheckInterval` | `15` | 检查周期（秒） |
 | `FastPollIntervalSec` / `FastPollWindowSec` | `5` / `120` | 开机快速轮询：守护启动后前 120 秒用 5 秒节拍（开机初期网络栈未就绪，密节拍尽早捕获就绪时刻），之后回 `CheckInterval` |
-| `ProbeIPs` | 阿里/腾讯/114 DNS | 探测目标，可换成任意稳定公网 IP |
+| `ProbeIPs` | 阿里/腾讯/114 DNS | 探测目标（TCP 握手判真实连通），海外/企业网络按「特殊网络环境的适配」更换 |
 | `ProbePort` / `ProbeTimeoutMs` | `53` / `3000` | 探测端口与单目标超时（毫秒） |
 | `FailThreshold` | `3` | 连续几轮探测失败才断开重拨 |
 | `BaseBackoffSec` / `MaxBackoffSec` | `15` / `600` | 拨号失败退避基数与上限（秒） |
@@ -185,7 +185,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "D:\AutoDial\AutoDial.ps1" -
 
 ## 迁移到其他设备
 
-整套方案可以搬到任何 Windows 10/11 机器：所有脚本逻辑通用，无第三方依赖（只用 PowerShell 5.1 和系统内置的 `rasphone`/`rasdial`/`Get-NetAdapter` 等）。机器相关的数据（指纹、日志）不入 git 仓库，新机器上重新生成。
+整套方案可以搬到任何 Windows 10/11 机器：所有脚本逻辑通用，无第三方依赖（只用 PowerShell 5.1 和系统内置的 `rasphone`/`rasdial`/`Get-NetAdapter` 等）。机器相关的数据（指纹、日志）不入 git 仓库，新机器上重新生成。目标环境的网络有特殊限制（海外、企业防火墙）时，另见文末「[特殊网络环境的适配](#特殊网络环境的适配)」。
 
 ### 迁移步骤
 
@@ -193,7 +193,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "D:\AutoDial\AutoDial.ps1" -
 2. **目标机先手动建好拨号**：在 Windows 网络设置里创建 PPPoE 连接，填入宽带账号密码并**连接成功一次**（这一步让系统保存凭据，脚本依赖它；同时确认账号线路本身可用）。这一步是系统操作，无法自动化。
 3. **克隆/拷贝本仓库到目标机**（例如 `D:\AutoDial`），**不要携带** `gateway.mac`——里面绑的是旧机器的光猫特征，带过去会挡住拨号。git 拉取天然不带它。
 4. **双击 `打开管理界面.vbs`**，按红绿灯清单逐项处理：
-   - 「配置文件」红灯 → 点「生成模板」，然后点底部「打开配置」核对 `BroadbandName`（目标机拨号条目名，默认「宽带连接」）和 `WiredAdapters`（目标机有线网卡名，可能是「以太网 2」等，`ncpa.cpl` 里查看），保存后重新检测
+   - 「配置文件」红灯 → 点「生成模板」，然后点底部「打开配置」核对 `BroadbandName`（目标机拨号条目名，默认「宽带连接」）和 `WiredAdapters`（目标机有线网卡名，可能是「以太网 2」等，`ncpa.cpl` 里查看）；目标环境在海外或企业网络内的话，同时核对 `ProbeIPs`/`ProbePort`（见「特殊网络环境的适配」），保存后重新检测
    - 「拨号弹窗」红灯 → 点「一键关闭弹窗」（自动把 pbk 的 PreviewUserPw 改为 0 并备份原文件；等价于手动在宽带连接属性里取消「提示名称、密码、证书等」——不关的话 rasphone 拨号会弹凭据框卡住无人值守流程）
    - 「链路指纹」红灯 → 插好宽带网线后点「绑定指纹」
    - 「开机自启」「守护进程」红灯 → 点「安装自启」「启动守护」（或直接点底部「安装并启动」）
@@ -206,6 +206,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "D:\AutoDial\AutoDial.ps1" -
 - **拨号双通道照样生效**：本机实测的「rasdial 26 连败、UI 路径全胜」是本机运营商的特性；其他运营商可能两者都通（双通道无影响）或都拒（那是线路/账号问题，不是脚本问题）。双通道设计已覆盖各种情况。
 - **环境差异已兼容**：`Get-NetAdapter` 状态的数字/字符串枚举、中文网卡名编码（.ps1 已带 BOM）、DHCP 动态网段等环境差异，脚本内部已做兼容，不需要按机器改逻辑。
 - **断开后的会话释放窗口**（约 1~3 分钟，部分运营商更长）由运营商侧决定，任何机器都绕不开；脚本紧盯期会自动抓住释放时机。
+
+### 特殊网络环境的适配
+
+默认配置面向中国大陆家用宽带。目标环境不同时改 `AutoDial.json` 即可适配，无需动脚本：
+
+- **海外网络**：默认探测目标（223.5.5.5 等国内公共 DNS）可能延迟高或不可达——正常连接会被连续误判为僵死，触发无谓的断开重拨循环。把 `ProbeIPs` 换成本地可达的公共目标（如 `["1.1.1.1", "8.8.8.8"]`）。
+- **企业/受限网络**：部分防火墙禁止对外 TCP 53。把 `ProbePort` 换成放行的端口（如 80/443）；探测是 TCP 握手，目标 IP 需在该端口提供 TCP 服务（大厂 DNS 与 CDN IP 通常可用）。
+- **换完先验证再上线**：`powershell -c "Test-NetConnection <探测IP> -Port <端口>"` 能通，再改 JSON 重启守护；否则误判循环会出现「宽带已连接」后紧接「连续 N 轮探测失败→断开重拨」的日志模式，据此也容易定位是探测目标的问题。
+- **WSH 被禁用的环境**（部分企业策略整体禁用 wscript）：两个 `.vbs` 入口会失效。把计划任务/快捷方式直接指向 `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File AutoDial.ps1 -Detached` 即可绕开。
+- **多用户共用电脑**：守护跟随安装它的用户运行（计划任务按用户登录触发），而宽带账号是全局唯一的——第二个用户不要重复安装，否则两个守护会抢占同一个 PPPoE 会话（后拨的报 691）。
+- **Windows 版本下限**：Win10/11（系统自带 PowerShell 5.1）。Win7 默认只有 2.0（缺 `ConvertFrom-Json`），除非先补装 5.1。
 
 ## 常见拨号错误码
 
