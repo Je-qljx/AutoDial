@@ -6,7 +6,7 @@
 
 - `AutoDial.ps1` — 主脚本（单文件守护循环），内置默认配置（顶部「配置区」），可被同目录 `AutoDial.json` 覆盖
 - `AutoDial.json` — 外置配置文件（入库）。换机适配只改这个文件；缺失/非法时主脚本回退内置默认值
-- `AutoDial-Setup.ps1` — 图形管理界面（WinForms，换机向导/控制面板）。只做状态检测和调现有脚本，不复制守护逻辑
+- `AutoDial-Setup.ps1` — 图形管理界面（WinForms，换机向导/控制面板）。只做状态检测和调现有脚本，不复制守护逻辑；「选择网卡」「配置详情」等弹窗是纯 UI（枚举网卡/展示配置），写配置仅限直接改 `AutoDial.json` 的键
 - `打开管理界面.vbs` — GUI 的双击入口（wscript 无黑窗启动，保持 ASCII 编码；文件名中文、内容英文注释说明）
 - `Start-AutoDial.vbs` — wscript 隐藏启动器（计划任务与启动项共用的统一入口，保持 ASCII 编码）
 - `Install-AutoDial.ps1` / `Uninstall-AutoDial.ps1` — 用户级自启安装/卸载（无需管理员权限；安装时优先注册计划任务，失败回退启动文件夹 .lnk）

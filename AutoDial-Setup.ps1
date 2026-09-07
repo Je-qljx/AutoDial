@@ -11,7 +11,7 @@
 #   1. AutoDial.json 配置文件存在且合法
 #   2. 宽带连接条目存在（rasdial 清单 + Get-NetAdapter 双查）
 #   3. 拨号弹窗已关（rasphone.pbk 的 PreviewUserPw=0），可一键修复
-#   4. 有线网卡在位（名称与配置一致）
+#   4. 有线网卡在位（名称与配置一致；红灯行「选择网卡」可从本机网卡列表勾选）
 #   5. 链路指纹已绑定（gateway.mac 存在）
 #   6. 开机自启已安装（计划任务 AutoDial 优先，回退启动文件夹 AutoDial.lnk）
 #   7. 守护进程运行中（Mutex 探测，不干扰现有单实例机制）
@@ -67,6 +67,23 @@ function Get-Config {
 # 生成默认配置模板
 function New-DefaultConfig {
     $DefaultConfig | ConvertTo-Json -Depth 3 | Set-Content -Path $ConfigFile -Encoding UTF8
+}
+
+# 更新配置文件里的单个键（其余键原样保留）。文件缺失时先落默认模板。
+# 注意 PS 5.1 的 ConvertTo-Json 会把单元素数组塌成标量，数组值需保持 [string[]] 类型；
+# ConvertTo-Json 对顶层 PSCustomObject 输出四空格缩进（与既有文件风格一致）。
+function Update-ConfigKey {
+    param([string]$Key, $Value)
+    if (-not (Test-Path $ConfigFile)) { New-DefaultConfig }
+    Copy-Item $ConfigFile ($ConfigFile + '.bak') -Force
+    $cfg = Get-Content -Raw -Path $ConfigFile -Encoding UTF8 | ConvertFrom-Json
+    if ($cfg.PSObject.Properties[$Key]) {
+        $cfg.PSObject.Properties[$Key].Value = $Value
+    } else {
+        [void]$cfg.PSObject.Properties.Add((New-Object System.Management.Automation.PSNoteProperty($Key, $Value)))
+    }
+    $out = $cfg | ConvertTo-Json -Depth 3
+    Set-Content -Path $ConfigFile -Value $out -Encoding UTF8
 }
 
 # 检测守护进程是否在运行：探测命名 Mutex（只打开不创建，不干扰现有实例）
@@ -186,7 +203,7 @@ function Check-Adapter {
     if ($found.Count -gt 0) {
         return @{ Ok=$true; Detail=('已找到：{0}' -f ($found -join '、')); Fix=$null }
     }
-    return @{ Ok=$false; Detail=('找不到名为「{0}」的网卡——请核对 AutoDial.json 的 WiredAdapters 与本机网卡名（网络连接里看）' -f ($names -join ',')); Fix='OpenConfig' }
+    return @{ Ok=$false; Detail=('找不到名为「{0}」的网卡——点右侧「选择网卡」从本机网卡列表里挑（或核对 AutoDial.json 的 WiredAdapters）' -f ($names -join ',')); Fix='PickAdapter' }
 }
 
 function Check-Fingerprint {
@@ -406,7 +423,7 @@ for ($i = 0; $i -lt $script:Checks.Count; $i++) {
         switch ($action) {
             'GenConfig'   { New-DefaultConfig; Append-Log '已生成默认配置模板 AutoDial.json。请点「打开配置」按需修改，保存后稍候自动刷新。'; Refresh-All }
             'FixPbk'      { Repair-Pbk }
-            'OpenConfig'  { Open-ConfigEditor }
+            'PickAdapter' { Show-AdapterPicker }
             'BindGateway' { Bind-Gateway }
             'Install'     { Invoke-ScriptOutput -Title '安装并启动' -FilePath $InstPs1 }
             'StartGuard'  { Start-GuardHidden }
@@ -537,13 +554,96 @@ function Show-AllLogs {
     [void]$viewer.ShowDialog($form)
 }
 
-function Open-ConfigEditor {
-    if (-not (Test-Path $ConfigFile)) { New-DefaultConfig }
-    Start-Process notepad.exe -ArgumentList ('"{0}"' -f $ConfigFile)
-    Append-Log '已用记事本打开 AutoDial.json。保存后点「重新检测」生效。'
+# 网卡选择器：枚举本机全部有线/无线物理网卡，用户勾选哪些是宽带口，写回配置。
+# 枚举用纯 .NET NetworkInterface（NetworkInterfaceType 是稳定数值枚举），不用
+# Get-NetAdapter——其 MediaType/Status 在部分系统返回数字枚举（见 AGENTS.md）。
+# 只列 Ethernet/Wireless80211，排除 Tunnel/Loopback 等虚拟口。
+function Get-PhysicalAdapters {
+    $list = @()
+    foreach ($ni in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+        $t = $ni.NetworkInterfaceType
+        if ($t -ne [System.Net.NetworkInformation.NetworkInterfaceType]::Ethernet -and
+            $t -ne [System.Net.NetworkInformation.NetworkInterfaceType]::Wireless80211) { continue }
+        $isWifi = $t -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Wireless80211
+        $list += @{
+            Name    = $ni.Name
+            Desc    = $ni.Description
+            IsWifi  = $isWifi
+            Up      = $ni.OperationalStatus -eq [System.Net.NetworkInformation.OperationalStatus]::Up
+        }
+    }
+    return $list
 }
 
-# 配置详情查看器：AutoDial.json 逐项参数 + gateway.mac 链路指纹，每条带中文解释。
+function Show-AdapterPicker {
+    $script:Cfg = Get-Config
+    $current = @(Get-CfgValue 'WiredAdapters' @('以太网'))
+    $adapters = Get-PhysicalAdapters
+
+    $viewer = New-Object System.Windows.Forms.Form
+    $viewer.Text          = '选择宽带网线所在网卡'
+    $viewer.Size          = New-Object System.Drawing.Size(680, 480)
+    $viewer.FormBorderStyle = 'FixedDialog'
+    $viewer.MaximizeBox   = $false
+    $viewer.StartPosition = 'CenterParent'
+    $viewer.Font          = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+
+    $lblTip = New-Object System.Windows.Forms.Label
+    $lblTip.Text     = '勾选插宽带光猫网线的网卡（可多选，脚本按「任一在位」判定）：'
+    $lblTip.Location = New-Object System.Drawing.Point(12, 12)
+    $lblTip.AutoSize = $true
+    $viewer.Controls.Add($lblTip)
+
+    $clb = New-Object System.Windows.Forms.CheckedListBox
+    $clb.CheckOnClick  = $true
+    $clb.Location      = New-Object System.Drawing.Point(15, 38)
+    $clb.Size          = New-Object System.Drawing.Size(632, 300)
+    # 条目文本：连接名 + 描述 + 类型 + 在位状态；Tag 存真实连接名
+    foreach ($a in $adapters) {
+        $typeText = if ($a.IsWifi) { '无线' } else { '有线' }
+        $upText   = if ($a.Up) { '网线在位/已启用' } else { '未连接' }
+        [void]$clb.Items.Add(('{0}  （{1}，{2}，{3}）' -f $a.Name, $a.Desc, $typeText, $upText), $current -contains $a.Name)
+    }
+    # 配置里有、但系统里找不到的名字也列出（防保存时静默丢失），标灰提示
+    foreach ($name in $current) {
+        if ($adapters.Name -notcontains $name) {
+            [void]$clb.Items.Add(('{0}  （系统里找不到这个名字，勾着以防丢失）' -f $name), $true)
+        }
+    }
+    $viewer.Controls.Add($clb)
+
+    $btnOk = New-Object System.Windows.Forms.Button
+    $btnOk.Text = '保存'; $btnOk.Location = New-Object System.Drawing.Point(452, 352); $btnOk.Size = New-Object System.Drawing.Size(95, 30)
+    $btnOk.Add_Click({
+        $picked = @()
+        foreach ($i in $clb.CheckedIndices) {
+            # 从显示文本里取行首到全角括号前的连接名
+            $picked += ($clb.Items[$i] -split '  （')[0]
+        }
+        if ($picked.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show($viewer, '至少勾选一个网卡。', 'AutoDial', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $wifiPicked = @($adapters | Where-Object { $_.IsWifi -and $picked -contains $_.Name } | ForEach-Object { $_.Name })
+        if ($wifiPicked.Count -gt 0) {
+            $ans = [System.Windows.Forms.MessageBox]::Show($viewer, ("勾选了无线网卡：{0}。守护会把它当宽带监控对象，通常宽带在有线网口。确定吗？" -f ($wifiPicked -join '、')), 'AutoDial', 'YesNo', 'Question')
+            if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+        }
+        Update-ConfigKey -Key 'WiredAdapters' -Value ([string[]]$picked)
+        Append-Log ('已把 WiredAdapters 更新为：{0}（原配置备份为 AutoDial.json.bak）。守护运行中需重启生效。' -f ($picked -join '、'))
+        $viewer.Close()
+        Refresh-All
+    })
+    $viewer.Controls.Add($btnOk)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = '取消'; $btnCancel.Location = New-Object System.Drawing.Point(557, 352); $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+    $btnCancel.Add_Click({ $viewer.Close() })
+    $viewer.Controls.Add($btnCancel)
+
+    [void]$viewer.ShowDialog($form)
+}
+
 # 只读展示（改配置走「打开配置」按钮），实际值实时读当前配置对象，
 # 未在 JSON 里配置的项显示内置默认值并注明。
 function Show-ConfigDetail {
@@ -585,7 +685,7 @@ function Show-ConfigDetail {
     # 说明顺序即展示顺序；Get-CfgValue 负责回退默认值
     $items = @(
         @{ Key='BroadbandName';      Default='宽带连接';  Desc='PPPoE 拨号条目名（「网络连接」ncpa.cpl 里显示的名字）。换机时改成目标机的拨号条目名' },
-        @{ Key='WiredAdapters';      Default='["以太网"]'; Desc='插网线的物理网卡名，可写多个。必须与 ncpa.cpl 里的名字完全一致，否则守护检测不到网线' },
+        @{ Key='WiredAdapters';      Default='["以太网"]'; Desc='插网线的物理网卡名，可写多个。必须与 ncpa.cpl 里的名字完全一致，否则守护检测不到网线；红灯行点「选择网卡」可直接挑选' },
         @{ Key='CheckInterval';      Default='15';        Desc='常规检查周期（秒）。守护每这么多秒巡检一轮：网线 → 会话 → 联网探测' },
         @{ Key='FastPollIntervalSec'; Default='5';        Desc='开机快速轮询节拍（秒）。启动初期网络栈（DHCP/邻居表）未就绪，用密节拍尽早捕获网络就绪时刻' },
         @{ Key='FastPollWindowSec';  Default='120';       Desc='开机快速轮询窗口（秒）。守护启动后前这段时间用快速节拍，之后回 CheckInterval' },
@@ -726,7 +826,7 @@ function Refresh-Checks {
                 $row.FixBtn.Text = Switch ($r.Fix) {
                     'GenConfig'   { '生成模板' }
                     'FixPbk'      { '一键关闭弹窗' }
-                    'OpenConfig'  { '打开配置' }
+                    'PickAdapter' { '选择网卡' }
                     'BindGateway' { '绑定指纹' }
                     'Install'     { '安装自启' }
                     'StartGuard'  { '启动守护' }
