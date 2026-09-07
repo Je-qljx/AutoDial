@@ -427,20 +427,21 @@ $grpOps.Text   = '操作'
 $grpOps.Location = New-Object System.Drawing.Point(12, 386)
 $grpOps.Size   = New-Object System.Drawing.Size(620, 62)
 
+# 操作按钮一排 6 个：15 + 95*6 + 5*5 + 15 = 620（与分组框同宽）
 $btnInstall = New-Object System.Windows.Forms.Button
-$btnInstall.Text = '安装并启动'; $btnInstall.Location = New-Object System.Drawing.Point(15, 24); $btnInstall.Size = New-Object System.Drawing.Size(110, 28)
+$btnInstall.Text = '安装并启动'; $btnInstall.Location = New-Object System.Drawing.Point(15, 24); $btnInstall.Size = New-Object System.Drawing.Size(95, 28)
 $btnInstall.Add_Click({ Invoke-ScriptOutput -Title '安装并启动' -FilePath $InstPs1 })
 
 $btnUninstall = New-Object System.Windows.Forms.Button
-$btnUninstall.Text = '停止并卸载'; $btnUninstall.Location = New-Object System.Drawing.Point(135, 24); $btnUninstall.Size = New-Object System.Drawing.Size(110, 28)
+$btnUninstall.Text = '停止并卸载'; $btnUninstall.Location = New-Object System.Drawing.Point(115, 24); $btnUninstall.Size = New-Object System.Drawing.Size(95, 28)
 $btnUninstall.Add_Click({ Stop-GuardAndUninstall })
 
 $btnBind = New-Object System.Windows.Forms.Button
-$btnBind.Text = '绑定指纹'; $btnBind.Location = New-Object System.Drawing.Point(255, 24); $btnBind.Size = New-Object System.Drawing.Size(110, 28)
+$btnBind.Text = '绑定指纹'; $btnBind.Location = New-Object System.Drawing.Point(215, 24); $btnBind.Size = New-Object System.Drawing.Size(95, 28)
 $btnBind.Add_Click({ Bind-Gateway })
 
 $btnRestart = New-Object System.Windows.Forms.Button
-$btnRestart.Text = '重启守护'; $btnRestart.Location = New-Object System.Drawing.Point(375, 24); $btnRestart.Size = New-Object System.Drawing.Size(110, 28)
+$btnRestart.Text = '重启守护'; $btnRestart.Location = New-Object System.Drawing.Point(315, 24); $btnRestart.Size = New-Object System.Drawing.Size(95, 28)
 $btnRestart.Add_Click({
     # 用完整安装收尾（而非仅拉起进程）：Uninstall 会删掉自启项，
     # Install 同时恢复自启 + 启动守护，保证重启后清单仍全绿
@@ -448,11 +449,15 @@ $btnRestart.Add_Click({
     Invoke-ScriptOutput -Title '重新安装并启动' -FilePath $InstPs1
 })
 
+$btnCfgDetail = New-Object System.Windows.Forms.Button
+$btnCfgDetail.Text = '配置详情'; $btnCfgDetail.Location = New-Object System.Drawing.Point(415, 24); $btnCfgDetail.Size = New-Object System.Drawing.Size(95, 28)
+$btnCfgDetail.Add_Click({ Show-ConfigDetail })
+
 $btnOpenCfg = New-Object System.Windows.Forms.Button
-$btnOpenCfg.Text = '打开配置'; $btnOpenCfg.Location = New-Object System.Drawing.Point(495, 24); $btnOpenCfg.Size = New-Object System.Drawing.Size(110, 28)
+$btnOpenCfg.Text = '打开配置'; $btnOpenCfg.Location = New-Object System.Drawing.Point(515, 24); $btnOpenCfg.Size = New-Object System.Drawing.Size(90, 28)
 $btnOpenCfg.Add_Click({ Open-ConfigEditor })
 
-$grpOps.Controls.AddRange(@($btnInstall, $btnUninstall, $btnBind, $btnRestart, $btnOpenCfg))
+$grpOps.Controls.AddRange(@($btnInstall, $btnUninstall, $btnBind, $btnRestart, $btnCfgDetail, $btnOpenCfg))
 $form.Controls.Add($grpOps)
 
 # --- 日志区 ---
@@ -549,6 +554,119 @@ function Open-ConfigEditor {
     if (-not (Test-Path $ConfigFile)) { New-DefaultConfig }
     Start-Process notepad.exe -ArgumentList ('"{0}"' -f $ConfigFile)
     Append-Log '已用记事本打开 AutoDial.json。保存后点「重新检测」生效。'
+}
+
+# 配置详情查看器：AutoDial.json 逐项参数 + gateway.mac 链路指纹，每条带中文解释。
+# 只读展示（改配置走「打开配置」按钮），实际值实时读当前配置对象，
+# 未在 JSON 里配置的项显示内置默认值并注明。
+function Show-ConfigDetail {
+    $viewer = New-Object System.Windows.Forms.Form
+    $viewer.Text          = 'AutoDial 配置详情（AutoDial.json + gateway.mac）'
+    $viewer.Size          = New-Object System.Drawing.Size(880, 640)
+    $viewer.StartPosition = 'CenterParent'
+    $viewer.Font          = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+
+    $rtb = New-Object System.Windows.Forms.RichTextBox
+    $rtb.ReadOnly   = $true
+    $rtb.DetectUrls = $false
+    $rtb.WordWrap   = $true
+    $rtb.ScrollBars = 'Vertical'
+    $rtb.Dock       = 'Fill'
+    $rtb.Font       = New-Object System.Drawing.Font('Consolas', 9)
+
+    # RichTextBox 着色小工具：标题青黑加粗、键名深蓝、值深红、解释灰
+    $appendColored = {
+        param([string]$Text, [System.Drawing.Color]$Color, [bool]$Bold = $false)
+        $rtb.SelectionStart  = $rtb.TextLength
+        $rtb.SelectionLength = 0
+        $rtb.SelectionColor  = $Color
+        $rtb.SelectionFont   = New-Object System.Drawing.Font('Consolas', 9, $(if ($Bold) { [System.Drawing.FontStyle]::Bold } else { [System.Drawing.FontStyle]::Regular }))
+        $rtb.AppendText($Text)
+        $rtb.SelectionFont = New-Object System.Drawing.Font('Consolas', 9)
+        $rtb.SelectionColor = [System.Drawing.Color]::Black
+    }
+
+    $script:Cfg = Get-Config
+    $cfgObj  = $script:Cfg
+    $nl      = [Environment]::NewLine
+
+    # ---- 第一部分：AutoDial.json ----
+    & $appendColored ('═══════ AutoDial.json（运行参数，' + $ConfigFile + '）═══════' + $nl + $nl) ([System.Drawing.Color]::Black) $true
+    if (-not $cfgObj) {
+        & $appendColored ('  （配置文件不存在或非法，守护脚本回退内置默认值。点「生成模板」可重新创建。）' + $nl + $nl) ([System.Drawing.Color]::Firebrick)
+    }
+    # 说明顺序即展示顺序；Get-CfgValue 负责回退默认值
+    $items = @(
+        @{ Key='BroadbandName';      Default='宽带连接';  Desc='PPPoE 拨号条目名（「网络连接」ncpa.cpl 里显示的名字）。换机时改成目标机的拨号条目名' },
+        @{ Key='WiredAdapters';      Default='["以太网"]'; Desc='插网线的物理网卡名，可写多个。必须与 ncpa.cpl 里的名字完全一致，否则守护检测不到网线' },
+        @{ Key='CheckInterval';      Default='15';        Desc='常规检查周期（秒）。守护每这么多秒巡检一轮：网线 → 会话 → 联网探测' },
+        @{ Key='FastPollIntervalSec'; Default='5';        Desc='开机快速轮询节拍（秒）。启动初期网络栈（DHCP/邻居表）未就绪，用密节拍尽早捕获网络就绪时刻' },
+        @{ Key='FastPollWindowSec';  Default='120';       Desc='开机快速轮询窗口（秒）。守护启动后前这段时间用快速节拍，之后回 CheckInterval' },
+        @{ Key='ProbeIPs';           Default='阿里/腾讯/114 DNS'; Desc='联网探测目标列表（任一通即判定网络正常）。海外网络换 1.1.1.1/8.8.8.8，否则正常连接会被误判为僵死' },
+        @{ Key='ProbePort';          Default='53';        Desc='探测端口（TCP 握手）。企业防火墙封 53 时可换 80/443' },
+        @{ Key='ProbeTimeoutMs';     Default='3000';      Desc='单轮探测总超时（毫秒）。多个目标并行探测，最坏耗时即此值' },
+        @{ Key='FailThreshold';      Default='3';         Desc='会话在但连续 N 轮探测失败 → 判定会话僵死，断开重拨' },
+        @{ Key='BaseBackoffSec';     Default='15';        Desc='拨号失败退避基数（秒）。按 2 的指数递增：15→30→60→…' },
+        @{ Key='MaxBackoffSec';      Default='600';       Desc='普通失败退避上限（秒），默认 10 分钟' },
+        @{ Key='AuthFailBackoffSec'; Default='900';       Desc='认证类失败（691/628 账号被占用/欠费）的长退避（秒），默认 15 分钟，防止反复撞击认证服务器锁号' },
+        @{ Key='AuthFastRetryCount'; Default='6';         Desc='认证类失败的紧盯期次数：断线后前 N 次每 30 秒重试（抓住旧会话快速释放窗口），之后才转长退避' },
+        @{ Key='LogKeepDays';        Default='30';        Desc='日志保留天数，超期自动清理' },
+        @{ Key='EnableLogFile';      Default='true';      Desc='是否写日志文件。false 时只跑不记（不建议）' }
+    )
+    foreach ($it in $items) {
+        $configured = $cfgObj -and $cfgObj.PSObject.Properties[$it.Key]
+        $val = Get-CfgValue $it.Key $it.Default
+        if ($val -is [System.Array]) { $valText = '[' + (($val | ForEach-Object { "$_" }) -join ', ') + ']' } else { $valText = "$val" }
+        $srcMark = if ($configured) { '' } else { '   ← 未配置，用默认值' }
+        & $appendColored ('  ' + $it.Key) ([System.Drawing.Color]::MidnightBlue) $true
+        & $appendColored (' = ' + $valText + $srcMark + $nl) ([System.Drawing.Color]::Firebrick)
+        & $appendColored ('      ' + $it.Desc + $nl) ([System.Drawing.Color]::DimGray)
+    }
+
+    # ---- 第二部分：gateway.mac（链路指纹白名单） ----
+    & $appendColored ($nl + '═══════ gateway.mac（链路指纹白名单，' + $BindFile + '）═══════' + $nl) ([System.Drawing.Color]::Black) $true
+    & $appendColored ('  作用：拨号前核对网线另一端的特征，对不上就拒绝拨号——防止把公司内网/别人家路由器误判为自家宽带。' + $nl) ([System.Drawing.Color]::DimGray)
+    & $appendColored ('  本文件由「绑定指纹」生成、拨号成功后自动学习扩充，勿改格式；换机/换光猫后重新绑定。' + $nl + $nl) ([System.Drawing.Color]::DimGray)
+    if (-not (Test-Path $BindFile)) {
+        & $appendColored ('  （指纹文件不存在 = 未绑定。不绑定时任何网线在位都可能触发拨号，有误拨风险；点「绑定指纹」创建。）' + $nl) ([System.Drawing.Color]::Firebrick)
+    } else {
+        try {
+            $fp = Get-Content -Raw -Path $BindFile -Encoding UTF8 | ConvertFrom-Json
+            $macs = @($fp.Macs | Where-Object { $_ })
+            & $appendColored ('  Macs（光猫/链路设备 MAC 白名单，' + $macs.Count + ' 个）' + $nl) ([System.Drawing.Color]::MidnightBlue) $true
+            if ($macs.Count -eq 0) {
+                & $appendColored ('      （暂无——绑定时尚未学到 MAC，拨号成功后会自动学习补充）' + $nl) ([System.Drawing.Color]::DimGray)
+            } else {
+                foreach ($m in $macs) {
+                    & $appendColored ('      ' + $m) ([System.Drawing.Color]::Firebrick)
+                    & $appendColored ('   ← 邻居表里学到的链路设备 MAC；绑定后学到其他设备 MAC 会拒绝拨号' + $nl) ([System.Drawing.Color]::DimGray)
+                }
+            }
+            $v6 = $fp.V6
+            & $appendColored ('  V6（光猫 IPv6 链路本地地址）' + $nl) ([System.Drawing.Color]::MidnightBlue) $true
+            if ($v6) {
+                & $appendColored ('      ' + $v6) ([System.Drawing.Color]::Firebrick)
+                & $appendColored ('   ← fe80:: 开头，光猫的 IPv6 特征（最可靠，不受 IP 池变化影响）' + $nl) ([System.Drawing.Color]::DimGray)
+            } else {
+                & $appendColored ('      （暂无——网卡未学到光猫 IPv6 邻居，学到后自动学习补充）' + $nl) ([System.Drawing.Color]::DimGray)
+            }
+            $subnets = @($fp.Subnets | Where-Object { $_ })
+            & $appendColored ('  Subnets（网段前缀白名单，' + $subnets.Count + ' 个）' + $nl) ([System.Drawing.Color]::MidnightBlue) $true
+            if ($subnets.Count -eq 0) {
+                & $appendColored ('      （暂无）' + $nl) ([System.Drawing.Color]::DimGray)
+            } else {
+                foreach ($s in $subnets) {
+                    & $appendColored ('      ' + $s + '*') ([System.Drawing.Color]::Firebrick)
+                    & $appendColored ('   ← 运营商 IP 池大段前缀（/16）。桥接模式每次插拔可能换 /24 网段，所以只记大段兜底' + $nl) ([System.Drawing.Color]::DimGray)
+                }
+            }
+        } catch {
+            & $appendColored ('  （指纹文件读取失败：' + $_.Exception.Message + '）' + $nl) ([System.Drawing.Color]::Firebrick)
+        }
+    }
+
+    $viewer.Controls.Add($rtb)
+    [void]$viewer.ShowDialog($form)
 }
 
 # 实时状态（守护/宽带/网线/探测）
