@@ -459,11 +459,14 @@ $grpLog.Text   = '操作输出 / 最近日志'
 $grpLog.Location = New-Object System.Drawing.Point(12, 456)
 $grpLog.Size   = New-Object System.Drawing.Size(620, 140)
 
-$txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Multiline  = $true
+# 用 RichTextBox 而非 TextBox：安装输出等含完整路径的行会超宽，TextBox 的横向
+# 滚动条一旦启用就常驻（内容不足也显示），RichTextBox 按需显示，配合
+# WordWrap=false + ScrollBars=Both 超宽行可左右拖动查看
+$txtLog = New-Object System.Windows.Forms.RichTextBox
 $txtLog.ReadOnly   = $true
-$txtLog.ScrollBars = 'Vertical'
+$txtLog.ScrollBars = 'Both'
 $txtLog.WordWrap   = $false
+$txtLog.DetectUrls = $false
 $txtLog.Location   = New-Object System.Drawing.Point(10, 20)
 $txtLog.Size       = New-Object System.Drawing.Size(598, 108)
 $txtLog.Font       = New-Object System.Drawing.Font('Consolas', 9)
