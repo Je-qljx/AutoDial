@@ -339,7 +339,9 @@ $script:Cfg = Get-Config
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text          = 'AutoDial 宽带拨号管理器'
-$form.Size          = New-Object System.Drawing.Size(660, 640)
+# 用 ClientSize（客户区）而非 Size（含标题栏/边框的外框）：底部按钮行定位在
+# y=604~632，若按外框 640 算，标题栏吃掉约 30px 后按钮整行落到客户区外被裁掉
+$form.ClientSize    = New-Object System.Drawing.Size(660, 660)
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox   = $false
 $form.StartPosition = 'CenterScreen'
