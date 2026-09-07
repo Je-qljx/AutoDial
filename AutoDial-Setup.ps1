@@ -483,6 +483,13 @@ $btnOpenLogs.Add_Click({
 })
 $form.Controls.Add($btnOpenLogs)
 
+$btnAllLogs = New-Object System.Windows.Forms.Button
+$btnAllLogs.Text = '查看全部日志'
+$btnAllLogs.Location = New-Object System.Drawing.Point(345, 604)
+$btnAllLogs.Size = New-Object System.Drawing.Size(140, 28)
+$btnAllLogs.Add_Click({ Show-AllLogs })
+$form.Controls.Add($btnAllLogs)
+
 # ----------------------------- 辅助函数（界面已建后再定义调用） -----------------------------
 function Append-Log {
     param([string]$Message)
@@ -490,6 +497,50 @@ function Append-Log {
     $txtLog.AppendText($line + [Environment]::NewLine)
     $txtLog.SelectionStart = $txtLog.TextLength
     $txtLog.ScrollToCaret()
+}
+
+# 查看全部日志：把 Logs/ 下按天滚动的日志文件按时间顺序拼进只读查看器窗口。
+# 每个文件插一行「── 文件名 ──」分隔标题；只读、等宽字体，打开即滚到最末尾
+# （最新日志在底部）。日志为纯文本，窗口关闭即释放，不驻留任何资源。
+function Show-AllLogs {
+    $viewer = New-Object System.Windows.Forms.Form
+    $viewer.Text          = 'AutoDial 全部日志（按天，旧 → 新）'
+    $viewer.Size          = New-Object System.Drawing.Size(860, 620)
+    $viewer.StartPosition = 'CenterParent'
+    $viewer.Font          = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+
+    $rtb = New-Object System.Windows.Forms.RichTextBox
+    $rtb.ReadOnly   = $true
+    $rtb.DetectUrls = $false
+    $rtb.WordWrap   = $false
+    $rtb.ScrollBars = 'Both'
+    $rtb.Dock       = 'Fill'
+    $rtb.Font       = New-Object System.Drawing.Font('Consolas', 9)
+
+    $files = @()
+    if (Test-Path $LogDirPath) {
+        $files = Get-ChildItem -Path $LogDirPath -Filter 'AutoDial-*.log' -ErrorAction SilentlyContinue |
+                 Sort-Object Name
+    }
+    if ($files.Count -eq 0) {
+        $rtb.Text = '暂无日志文件（Logs 目录不存在或为空）。'
+    } else {
+        foreach ($f in $files) {
+            $rtb.AppendText(('──────── {0} ────────' -f $f.Name) + [Environment]::NewLine)
+            try {
+                $content = Get-Content -Path $f.FullName -Encoding UTF8 -ErrorAction Stop
+                if ($content) { $rtb.AppendText(($content -join [Environment]::NewLine) + [Environment]::NewLine) }
+            } catch {
+                $rtb.AppendText(('（读取失败：{0}）' -f $_.Exception.Message) + [Environment]::NewLine)
+            }
+            $rtb.AppendText([Environment]::NewLine)
+        }
+        $rtb.SelectionStart = $rtb.TextLength
+        $rtb.ScrollToCaret()
+    }
+
+    $viewer.Controls.Add($rtb)
+    [void]$viewer.ShowDialog($form)
 }
 
 function Open-ConfigEditor {
