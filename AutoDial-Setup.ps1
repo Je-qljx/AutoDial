@@ -807,7 +807,7 @@ function Refresh-Status {
     }
 }
 
-# 修复动作 → 按钮文案（绿灯灰显与红灯亮起共用同一名称，灰显即该动作当前不需要）
+# 修复动作 → 按钮文案（红绿两态共用同一名称）
 $script:FixLabels = @{
     'GenConfig'   = '生成模板'
     'FixPbk'      = '一键关闭弹窗'
@@ -817,22 +817,25 @@ $script:FixLabels = @{
     'StartGuard'  = '启动守护'
     'ManualOnly'  = '手动完成'
 }
+# 永远可点的动作：改配置类操作无破坏性、随时可能需要调整（如增减多网卡），不随绿红灯禁用
+$script:AlwaysEnabledFixes = @('PickAdapter', 'GenConfig')
 
-# 清单逐项刷新 + 修复按钮状态（按钮常驻不隐藏，用 Enabled 置灰表达可用性：
-# 绿灯=灰显动作名（该项动作当前不需要）、红灯可修=亮起、红灯需人工=灰显「手动完成」）
+# 清单逐项刷新 + 修复按钮状态（按钮常驻不隐藏，用 Enabled 置灰表达可用性；
+# AlwaysEnabledFixes 里的动作绿灯时也保持可点击）
 function Refresh-Checks {
     for ($i = 0; $i -lt $script:Checks.Count; $i++) {
         $item = $script:Checks[$i]
         $r = & $item.Func
         $row = $script:CheckRows[$i]
         $label = if ($r.Fix -and $script:FixLabels[$r.Fix]) { $script:FixLabels[$r.Fix] } else { '修复' }
+        $alwaysOn = $r.Fix -and ($script:AlwaysEnabledFixes -contains $r.Fix)
         if ($r.Ok) {
             $row.Dot.BackColor = [System.Drawing.Color]::ForestGreen
             $row.Detail.ForeColor = [System.Drawing.Color]::DimGray
             $row.Detail.Text = $r.Detail
             $row.FixBtn.Text = $label
-            $row.FixBtn.Enabled = $false
-            $row.FixBtn.Tag = $null
+            $row.FixBtn.Enabled = $alwaysOn
+            $row.FixBtn.Tag = if ($alwaysOn) { $r.Fix } else { $null }
         } else {
             $row.Dot.BackColor = [System.Drawing.Color]::Firebrick
             $row.Detail.ForeColor = [System.Drawing.Color]::Firebrick
@@ -842,7 +845,7 @@ function Refresh-Checks {
                 $row.FixBtn.Enabled = $true
                 $row.FixBtn.Tag = $r.Fix
             } elseif ($r.Fix) {
-                # 绿灯也可能是 ManualOnly（需人工的项做对了），红灯 ManualOnly 仍是人工
+                # 需人工的项（如宽带条目创建）做错了也只能人工处理
                 $row.FixBtn.Text = '手动完成'
                 $row.FixBtn.Enabled = $false
                 $row.FixBtn.Tag = $null
