@@ -145,17 +145,17 @@ function Check-Config {
         }
         return @{ Ok=$false; Detail='配置文件格式非法（可重新生成默认模板）'; Fix='GenConfig' }
     }
-    return @{ Ok=$true; Detail=('宽带条目「{0}」/ 网卡「{1}」' -f $cfg.BroadbandName, (@($cfg.WiredAdapters) -join ',')); Fix=$null }
+    return @{ Ok=$true; Detail=('宽带条目「{0}」/ 网卡「{1}」' -f $cfg.BroadbandName, (@($cfg.WiredAdapters) -join ',')); Fix='GenConfig' }
 }
 
 function Check-BroadbandEntry {
     $name = Get-CfgValue 'BroadbandName' '宽带连接'
     # rasdial 空清单也输出表头「没有指定...」之外还会列出所有条目名；用 Get-NetAdapter 双查
     $ad = Get-NetAdapter -Name $name -ErrorAction SilentlyContinue
-    if ($ad) { return @{ Ok=$true; Detail=('条目「{0}」存在（PPPoE 网卡在系统注册）' -f $name); Fix=$null } }
+    if ($ad) { return @{ Ok=$true; Detail=('条目「{0}」存在（PPPoE 网卡在系统注册）' -f $name); Fix='ManualOnly' } }
     $out = & "$env:SystemRoot\System32\rasdial.exe" 2>$null
     if ($out -and (($out -join "`n") -match [regex]::Escape($name))) {
-        return @{ Ok=$true; Detail=('条目「{0}」存在（rasdial 清单）' -f $name); Fix=$null }
+        return @{ Ok=$true; Detail=('条目「{0}」存在（rasdial 清单）' -f $name); Fix='ManualOnly' }
     }
     return @{ Ok=$false; Detail=('未找到宽带条目「{0}」——请先在系统设置里手动建立宽带连接并连上一次' -f $name); Fix=$null }
 }
@@ -184,7 +184,7 @@ function Check-PbkSilent {
         return @{ Ok=$false; Detail='pbk 未设置 PreviewUserPw（新建条目默认会弹凭据框），建议一键关闭'; Fix='FixPbk' }
     }
     if ($pm.Groups[1].Value -eq '0') {
-        return @{ Ok=$true; Detail='拨号弹窗已关闭（PreviewUserPw=0，静默拨号）'; Fix=$null }
+        return @{ Ok=$true; Detail='拨号弹窗已关闭（PreviewUserPw=0，静默拨号）'; Fix='FixPbk' }
     }
     return @{ Ok=$false; Detail=('拨号会弹凭据确认框，卡住无人值守流程（PreviewUserPw={0}）' -f $pm.Groups[1].Value); Fix='FixPbk' }
 }
@@ -201,14 +201,14 @@ function Check-Adapter {
         }
     }
     if ($found.Count -gt 0) {
-        return @{ Ok=$true; Detail=('已找到：{0}' -f ($found -join '、')); Fix=$null }
+        return @{ Ok=$true; Detail=('已找到：{0}' -f ($found -join '、')); Fix='PickAdapter' }
     }
     return @{ Ok=$false; Detail=('找不到名为「{0}」的网卡——点右侧「选择网卡」从本机网卡列表里挑（或核对 AutoDial.json 的 WiredAdapters）' -f ($names -join ',')); Fix='PickAdapter' }
 }
 
 function Check-Fingerprint {
     if (Test-Path $BindFile) {
-        return @{ Ok=$true; Detail='链路指纹已绑定（gateway.mac 存在，拨号成功后还会自动学习）'; Fix=$null }
+        return @{ Ok=$true; Detail='链路指纹已绑定（gateway.mac 存在，拨号成功后还会自动学习）'; Fix='BindGateway' }
     }
     return @{ Ok=$false; Detail='链路指纹未绑定——不绑定时任何网线在位都可能触发拨号（有误拨风险）'; Fix='BindGateway' }
 }
@@ -217,17 +217,17 @@ function Check-AutoStart {
     # 与 Install-AutoDial.ps1 的双形态对应：优先计划任务，其次启动文件夹快捷方式
     try {
         $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-        return @{ Ok=$true; Detail=('开机自启已安装（计划任务 {0}，登录触发）' -f $t.TaskName); Fix=$null }
+        return @{ Ok=$true; Detail=('开机自启已安装（计划任务 {0}，登录触发）' -f $t.TaskName); Fix='Install' }
     } catch { }
     if (Test-Path $StartupLnk) {
-        return @{ Ok=$true; Detail='开机自启已安装（启动文件夹 AutoDial.lnk，计划任务不可用时的回退形态）'; Fix=$null }
+        return @{ Ok=$true; Detail='开机自启已安装（启动文件夹 AutoDial.lnk，计划任务不可用时的回退形态）'; Fix='Install' }
     }
     return @{ Ok=$false; Detail='开机自启未安装'; Fix='Install' }
 }
 
 function Check-GuardRunning {
     if (Test-GuardRunning) {
-        return @{ Ok=$true; Detail='守护进程运行中（单实例互斥锁在线）'; Fix=$null }
+        return @{ Ok=$true; Detail='守护进程运行中（单实例互斥锁在线）'; Fix='StartGuard' }
     }
     return @{ Ok=$false; Detail='守护进程未运行'; Fix='StartGuard' }
 }
@@ -416,7 +416,7 @@ for ($i = 0; $i -lt $script:Checks.Count; $i++) {
     $detail.ForeColor = [System.Drawing.Color]::DimGray
     $fix = New-Object System.Windows.Forms.Button
     $fix.Dock = 'Fill'; $fix.Margin = New-Object System.Windows.Forms.Padding(6, 5, 3, 5)
-    $fix.Text = '已就绪'; $fix.Enabled = $false   # 初始灰显，首轮 Refresh-Checks 按真实状态更新
+    $fix.Text = '…'; $fix.Enabled = $false   # 初始占位，首轮 Refresh-Checks 按真实状态更新
     $fix.Tag = $null   # 刷新时写入动作标识字符串，点击时用 $this.Tag 读取（不用闭包，避免作用域坑）
     $fix.Add_Click({
         $action = $this.Tag
@@ -807,38 +807,47 @@ function Refresh-Status {
     }
 }
 
+# 修复动作 → 按钮文案（绿灯灰显与红灯亮起共用同一名称，灰显即该动作当前不需要）
+$script:FixLabels = @{
+    'GenConfig'   = '生成模板'
+    'FixPbk'      = '一键关闭弹窗'
+    'PickAdapter' = '选择网卡'
+    'BindGateway' = '绑定指纹'
+    'Install'     = '安装自启'
+    'StartGuard'  = '启动守护'
+    'ManualOnly'  = '手动完成'
+}
+
 # 清单逐项刷新 + 修复按钮状态（按钮常驻不隐藏，用 Enabled 置灰表达可用性：
-# 绿灯=灰显「已就绪」，红灯可修=亮起，红灯需人工=灰显「需人工处理」，行高稳定不跳动）
+# 绿灯=灰显动作名（该项动作当前不需要）、红灯可修=亮起、红灯需人工=灰显「手动完成」）
 function Refresh-Checks {
     for ($i = 0; $i -lt $script:Checks.Count; $i++) {
         $item = $script:Checks[$i]
         $r = & $item.Func
         $row = $script:CheckRows[$i]
+        $label = if ($r.Fix -and $script:FixLabels[$r.Fix]) { $script:FixLabels[$r.Fix] } else { '修复' }
         if ($r.Ok) {
             $row.Dot.BackColor = [System.Drawing.Color]::ForestGreen
             $row.Detail.ForeColor = [System.Drawing.Color]::DimGray
             $row.Detail.Text = $r.Detail
-            $row.FixBtn.Text = '已就绪'
+            $row.FixBtn.Text = $label
             $row.FixBtn.Enabled = $false
             $row.FixBtn.Tag = $null
         } else {
             $row.Dot.BackColor = [System.Drawing.Color]::Firebrick
             $row.Detail.ForeColor = [System.Drawing.Color]::Firebrick
             $row.Detail.Text = $r.Detail
-            if ($r.Fix) {
-                $row.FixBtn.Text = Switch ($r.Fix) {
-                    'GenConfig'   { '生成模板' }
-                    'FixPbk'      { '一键关闭弹窗' }
-                    'PickAdapter' { '选择网卡' }
-                    'BindGateway' { '绑定指纹' }
-                    'Install'     { '安装自启' }
-                    'StartGuard'  { '启动守护' }
-                    default       { '修复' }
-                }
+            if ($r.Fix -and $r.Fix -ne 'ManualOnly') {
+                $row.FixBtn.Text = $label
                 $row.FixBtn.Enabled = $true
                 $row.FixBtn.Tag = $r.Fix
+            } elseif ($r.Fix) {
+                # 绿灯也可能是 ManualOnly（需人工的项做对了），红灯 ManualOnly 仍是人工
+                $row.FixBtn.Text = '手动完成'
+                $row.FixBtn.Enabled = $false
+                $row.FixBtn.Tag = $null
             } else {
-                $row.FixBtn.Text = '需人工处理'
+                $row.FixBtn.Text = $label
                 $row.FixBtn.Enabled = $false
                 $row.FixBtn.Tag = $null
             }
