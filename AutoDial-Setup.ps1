@@ -381,10 +381,45 @@ $lblNet.Location = New-Object System.Drawing.Point(320, 46); $lblNet.AutoSize = 
 $grpStatus.Controls.AddRange(@($lblGuard, $lblBroad, $lblWire, $lblNet))
 $form.Controls.Add($grpStatus)
 
+# --- 操作按钮区 ---
+$grpOps = New-Object System.Windows.Forms.GroupBox
+$grpOps.Text   = '操作'
+$grpOps.Location = New-Object System.Drawing.Point(12, 110)
+$grpOps.Size   = New-Object System.Drawing.Size(620, 62)
+
+# 操作按钮一排 5 个：15 + 110*5 + 10*4 + 15 = 640 → 收尾 120 补齐 620（与分组框同宽）
+$btnInstall = New-Object System.Windows.Forms.Button
+$btnInstall.Text = '安装并启动'; $btnInstall.Location = New-Object System.Drawing.Point(15, 24); $btnInstall.Size = New-Object System.Drawing.Size(110, 28)
+$btnInstall.Add_Click({ Invoke-ScriptOutput -Title '安装并启动' -FilePath $InstPs1 })
+
+$btnUninstall = New-Object System.Windows.Forms.Button
+$btnUninstall.Text = '停止并卸载'; $btnUninstall.Location = New-Object System.Drawing.Point(135, 24); $btnUninstall.Size = New-Object System.Drawing.Size(110, 28)
+$btnUninstall.Add_Click({ Stop-GuardAndUninstall })
+
+$btnBind = New-Object System.Windows.Forms.Button
+$btnBind.Text = '绑定指纹'; $btnBind.Location = New-Object System.Drawing.Point(255, 24); $btnBind.Size = New-Object System.Drawing.Size(110, 28)
+$btnBind.Add_Click({ Bind-Gateway })
+
+$btnRestart = New-Object System.Windows.Forms.Button
+$btnRestart.Text = '重启守护'; $btnRestart.Location = New-Object System.Drawing.Point(375, 24); $btnRestart.Size = New-Object System.Drawing.Size(110, 28)
+$btnRestart.Add_Click({
+    # 用完整安装收尾（而非仅拉起进程）：Uninstall 会删掉自启项，
+    # Install 同时恢复自启 + 启动守护，保证重启后清单仍全绿
+    Invoke-ScriptOutput -Title '停止守护' -FilePath $UninstPs1
+    Invoke-ScriptOutput -Title '重新安装并启动' -FilePath $InstPs1
+})
+
+$btnCfgDetail = New-Object System.Windows.Forms.Button
+$btnCfgDetail.Text = '配置详情'; $btnCfgDetail.Location = New-Object System.Drawing.Point(495, 24); $btnCfgDetail.Size = New-Object System.Drawing.Size(110, 28)
+$btnCfgDetail.Add_Click({ Show-ConfigDetail })
+
+$grpOps.Controls.AddRange(@($btnInstall, $btnUninstall, $btnBind, $btnRestart, $btnCfgDetail))
+$form.Controls.Add($grpOps)
+
 # --- 换机检查清单 ---
 $grpChecks = New-Object System.Windows.Forms.GroupBox
 $grpChecks.Text   = '换机检查清单（全绿即完成）'
-$grpChecks.Location = New-Object System.Drawing.Point(12, 110)
+$grpChecks.Location = New-Object System.Drawing.Point(12, 180)
 $grpChecks.Size   = New-Object System.Drawing.Size(620, 268)
 
 # 行布局用 TableLayoutPanel：150% DPI 缩放下对 Label 手写像素 Location 会被布局引擎
@@ -438,41 +473,6 @@ for ($i = 0; $i -lt $script:Checks.Count; $i++) {
 }
 $grpChecks.Controls.Add($table)
 $form.Controls.Add($grpChecks)
-
-# --- 操作按钮区 ---
-$grpOps = New-Object System.Windows.Forms.GroupBox
-$grpOps.Text   = '操作'
-$grpOps.Location = New-Object System.Drawing.Point(12, 386)
-$grpOps.Size   = New-Object System.Drawing.Size(620, 62)
-
-# 操作按钮一排 5 个：15 + 110*5 + 10*4 + 15 = 640 → 收尾 120 补齐 620（与分组框同宽）
-$btnInstall = New-Object System.Windows.Forms.Button
-$btnInstall.Text = '安装并启动'; $btnInstall.Location = New-Object System.Drawing.Point(15, 24); $btnInstall.Size = New-Object System.Drawing.Size(110, 28)
-$btnInstall.Add_Click({ Invoke-ScriptOutput -Title '安装并启动' -FilePath $InstPs1 })
-
-$btnUninstall = New-Object System.Windows.Forms.Button
-$btnUninstall.Text = '停止并卸载'; $btnUninstall.Location = New-Object System.Drawing.Point(135, 24); $btnUninstall.Size = New-Object System.Drawing.Size(110, 28)
-$btnUninstall.Add_Click({ Stop-GuardAndUninstall })
-
-$btnBind = New-Object System.Windows.Forms.Button
-$btnBind.Text = '绑定指纹'; $btnBind.Location = New-Object System.Drawing.Point(255, 24); $btnBind.Size = New-Object System.Drawing.Size(110, 28)
-$btnBind.Add_Click({ Bind-Gateway })
-
-$btnRestart = New-Object System.Windows.Forms.Button
-$btnRestart.Text = '重启守护'; $btnRestart.Location = New-Object System.Drawing.Point(375, 24); $btnRestart.Size = New-Object System.Drawing.Size(110, 28)
-$btnRestart.Add_Click({
-    # 用完整安装收尾（而非仅拉起进程）：Uninstall 会删掉自启项，
-    # Install 同时恢复自启 + 启动守护，保证重启后清单仍全绿
-    Invoke-ScriptOutput -Title '停止守护' -FilePath $UninstPs1
-    Invoke-ScriptOutput -Title '重新安装并启动' -FilePath $InstPs1
-})
-
-$btnCfgDetail = New-Object System.Windows.Forms.Button
-$btnCfgDetail.Text = '配置详情'; $btnCfgDetail.Location = New-Object System.Drawing.Point(495, 24); $btnCfgDetail.Size = New-Object System.Drawing.Size(110, 28)
-$btnCfgDetail.Add_Click({ Show-ConfigDetail })
-
-$grpOps.Controls.AddRange(@($btnInstall, $btnUninstall, $btnBind, $btnRestart, $btnCfgDetail))
-$form.Controls.Add($grpOps)
 
 # --- 日志区 ---
 $grpLog = New-Object System.Windows.Forms.GroupBox
@@ -872,7 +872,7 @@ $timer.Start()
 $form.Add_Shown({
     Refresh-All
     $bbName = Get-CfgValue 'BroadbandName' '宽带连接'
-    Append-Log ('AutoDial 管理器已打开。按红绿灯逐项处理即可完成换机；「联网探测」等状态每 15 秒自动刷新。宽带条目：{0}' -f $bbName)
+    Append-Log ('AutoDial 管理器已打开。点击「安装并启动」完成安装；「联网探测」等状态每 15 秒自动刷新。宽带条目：{0}' -f $bbName)
 })
 
 [void]$form.ShowDialog()
